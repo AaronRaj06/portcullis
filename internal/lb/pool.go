@@ -18,22 +18,47 @@ type Pool struct {
 	Backends []*Backend
 	Balancer Balancer
 
+	// Transport overrides the proxy's default transport for this pool, e.g. to
+	// trust a private CA or speak cleartext HTTP/2 (h2c). nil uses the default.
+	Transport http.RoundTripper
+
 	// Passive ejection: after EjectAfter consecutive gateway failures, a backend
-	// gets no traffic for EjectFor, then is re-admitted. EjectAfter 0 disables it.
-	EjectAfter int
-	EjectFor   time.Duration
+	// gets no traffic for EjectFor × (times ejected in a row), capped at MaxEjectFor
+	// (0 = no cap), then is re-admitted. A backend that keeps failing is kept out
+	// longer each time. The multiplier resets once it serves successfully for a
+	// full EjectFor after re-admission. EjectAfter 0 disables ejection.
+	EjectAfter  int
+	EjectFor    time.Duration
+	MaxEjectFor time.Duration
+
+	// Panic: if no backend is available, send to one anyway rather than failing
+	// every request. This guards against health checks that are wrong (e.g. a
+	// broken /healthz on a working app) taking the whole service down.
+	Panic bool
 
 	// Retries is the number of extra attempts for retryable failures, limited by Budget.
 	Retries int
 	Budget  *RetryBudget
+
+	panicNext atomic.Uint64
 }
 
-// Pick chooses a backend, skipping tried.
-func (p *Pool) Pick(r *http.Request, tried []*Backend) (*Backend, error) {
-	if b := p.Balancer.Pick(r, tried, time.Now().UnixNano()); b != nil {
-		return b, nil
+// Pick chooses a backend for a request from client, skipping tried. panicked
+// reports that no backend was available and Panic mode chose one regardless.
+func (p *Pool) Pick(r *http.Request, client string, tried []*Backend) (b *Backend, panicked bool, err error) {
+	if b := p.Balancer.Pick(r, client, tried, time.Now().UnixNano()); b != nil {
+		return b, false, nil
 	}
-	return nil, ErrNoBackend
+	if p.Panic {
+		n := uint64(len(p.Backends))
+		start := p.panicNext.Add(1)
+		for i := uint64(0); i < n; i++ {
+			if b := p.Backends[(start+i)%n]; !contains(tried, b) {
+				return b, true, nil
+			}
+		}
+	}
+	return nil, false, ErrNoBackend
 }
 
 // Report records an attempt's outcome. failed means a gateway failure (connect
@@ -47,13 +72,21 @@ func (p *Pool) Report(b *Backend, failed bool) (ejected bool) {
 		if b.fails.Load() != 0 {
 			b.fails.Store(0)
 		}
+		// Clean for a full EjectFor since re-admission: forget earlier ejections.
+		if b.ejections.Load() != 0 && time.Now().UnixNano() > b.ejectedUntil.Load()+int64(p.EjectFor) {
+			b.ejections.Store(0)
+		}
 		return false
 	}
 	if int(b.fails.Add(1)) < p.EjectAfter {
 		return false
 	}
 	b.fails.Store(0)
-	b.ejectedUntil.Store(time.Now().Add(p.EjectFor).UnixNano())
+	d := p.EjectFor * time.Duration(b.ejections.Add(1))
+	if p.MaxEjectFor > 0 && d > p.MaxEjectFor {
+		d = p.MaxEjectFor
+	}
+	b.ejectedUntil.Store(time.Now().Add(d).UnixNano())
 	return true
 }
 

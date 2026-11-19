@@ -18,6 +18,7 @@ type Backend struct {
 	down         atomic.Bool  // set by active health checks; zero value means up
 	ejectedUntil atomic.Int64 // unix nanoseconds; set by passive ejection
 	fails        atomic.Int32 // consecutive gateway failures
+	ejections    atomic.Int32 // consecutive ejections, multiplies EjectFor
 }
 
 // NewBackend returns a healthy backend. Weights below 1 are treated as 1.
@@ -50,13 +51,14 @@ func (b *Backend) Release() { b.inflight.Add(-1) }
 
 // usable is the common filter for every algorithm.
 func usable(b *Backend, now int64, tried []*Backend) bool {
-	if !b.Available(now) {
-		return false
-	}
-	for _, t := range tried {
+	return b.Available(now) && !contains(tried, b)
+}
+
+func contains(bs []*Backend, b *Backend) bool {
+	for _, t := range bs {
 		if t == b {
-			return false
+			return true
 		}
 	}
-	return true
+	return false
 }

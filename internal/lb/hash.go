@@ -1,7 +1,6 @@
 package lb
 
 import (
-	"net"
 	"net/http"
 	"slices"
 	"strconv"
@@ -11,17 +10,18 @@ import (
 // it keeps every backend's share of the ring within about 5% of fair; 160 gave 16%.
 const DefaultVnodes = 640
 
-// KeyFunc extracts the consistent-hashing key from a request. "" means no key.
-type KeyFunc func(r *http.Request) string
+// KeyFunc extracts the consistent-hashing key from a request. client is the real
+// client IP. "" means no key.
+type KeyFunc func(r *http.Request, client string) string
 
 // HeaderKey hashes on a request header.
 func HeaderKey(name string) KeyFunc {
-	return func(r *http.Request) string { return r.Header.Get(name) }
+	return func(r *http.Request, _ string) string { return r.Header.Get(name) }
 }
 
 // CookieKey hashes on a cookie value.
 func CookieKey(name string) KeyFunc {
-	return func(r *http.Request) string {
+	return func(r *http.Request, _ string) string {
 		c, err := r.Cookie(name)
 		if err != nil {
 			return ""
@@ -30,17 +30,12 @@ func CookieKey(name string) KeyFunc {
 	}
 }
 
-// ClientIPKey hashes on the TCP peer address.
-func ClientIPKey(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
-}
+// ClientIPKey hashes on the real client IP: the TCP peer, or behind trusted
+// proxies the original client from X-Forwarded-For (resolved by the proxy).
+func ClientIPKey(_ *http.Request, client string) string { return client }
 
 // PathKey hashes on the URL path.
-func PathKey(r *http.Request) string { return r.URL.Path }
+func PathKey(r *http.Request, _ string) string { return r.URL.Path }
 
 // ring is consistent hashing with virtual nodes. Each backend owns
 // vnodes×Weight points on a 64-bit ring. A key goes to the first point at or after
@@ -81,14 +76,14 @@ func NewConsistentHash(bs []*Backend, key KeyFunc, vnodes int) Balancer {
 	return rg
 }
 
-func (rg *ring) Pick(r *http.Request, tried []*Backend, now int64) *Backend {
+func (rg *ring) Pick(r *http.Request, client string, tried []*Backend, now int64) *Backend {
 	n := len(rg.hashes)
 	if n == 0 {
 		return nil
 	}
-	k := rg.key(r)
+	k := rg.key(r, client)
 	if k == "" {
-		k = ClientIPKey(r)
+		k = client
 	}
 	i, _ := slices.BinarySearch(rg.hashes, hash64(k))
 	// Walk clockwise past unusable owners. A distinct backend appears within a few

@@ -9,8 +9,9 @@ import (
 // Balancer chooses a backend for a request.
 type Balancer interface {
 	// Pick returns an available backend that is not in tried, or nil if there is none.
+	// client is the real client IP (X-Forwarded-For-aware behind trusted proxies).
 	// now is the current time in unix nanoseconds (passed in so tests control time).
-	Pick(r *http.Request, tried []*Backend, now int64) *Backend
+	Pick(r *http.Request, client string, tried []*Backend, now int64) *Backend
 }
 
 // schedule implements round-robin and smooth weighted round-robin lock-free:
@@ -39,35 +40,49 @@ func NewWeightedRoundRobin(bs []*Backend) Balancer {
 	return &schedule{seq: smoothSequence(bs, w)}
 }
 
-// smoothSequence is NGINX's smooth weighted round-robin, run once to produce
-// one full cycle. Weights are divided by their GCD to keep the cycle short.
+// smoothSequence is one full smooth-weighted cycle of backends.
 func smoothSequence(bs []*Backend, w []int) []*Backend {
-	if len(bs) == 0 {
-		return nil
+	order := SmoothOrder(w)
+	seq := make([]*Backend, len(order))
+	for i, j := range order {
+		seq[i] = bs[j]
 	}
-	g := 0
+	return seq
+}
+
+// SmoothOrder runs NGINX's smooth weighted round-robin once and returns one full
+// cycle as indexes into w: weights 5,1,1 give 0 0 1 0 2 0 0. Weights are divided
+// by their GCD to keep the cycle short. Zero weights never appear.
+func SmoothOrder(w []int) []int {
+	g, total := 0, 0
 	for _, x := range w {
 		g = gcd(g, x)
 	}
-	total := 0
-	for i := range w {
-		w[i] /= g
-		total += w[i]
+	if g == 0 {
+		return nil
 	}
-	cur := make([]int, len(bs))
-	seq := make([]*Backend, 0, total)
-	for len(seq) < total {
-		best := 0
-		for i := range bs {
-			cur[i] += w[i]
-			if cur[i] > cur[best] {
+	ws := make([]int, len(w))
+	for i, x := range w {
+		ws[i] = x / g
+		total += ws[i]
+	}
+	cur := make([]int, len(ws))
+	order := make([]int, 0, total)
+	for len(order) < total {
+		best := -1
+		for i := range ws {
+			if ws[i] == 0 {
+				continue
+			}
+			cur[i] += ws[i]
+			if best < 0 || cur[i] > cur[best] {
 				best = i
 			}
 		}
 		cur[best] -= total
-		seq = append(seq, bs[best])
+		order = append(order, best)
 	}
-	return seq
+	return order
 }
 
 func gcd(a, b int) int {
@@ -77,7 +92,7 @@ func gcd(a, b int) int {
 	return a
 }
 
-func (s *schedule) Pick(_ *http.Request, tried []*Backend, now int64) *Backend {
+func (s *schedule) Pick(_ *http.Request, _ string, tried []*Backend, now int64) *Backend {
 	n := uint64(len(s.seq))
 	if n == 0 {
 		return nil
@@ -111,7 +126,7 @@ type leastConn struct {
 // NewLeastConnections returns a least-connections balancer.
 func NewLeastConnections(bs []*Backend) Balancer { return &leastConn{bs: bs} }
 
-func (l *leastConn) Pick(_ *http.Request, tried []*Backend, now int64) *Backend {
+func (l *leastConn) Pick(_ *http.Request, _ string, tried []*Backend, now int64) *Backend {
 	n := uint64(len(l.bs))
 	if n == 0 {
 		return nil
@@ -138,10 +153,10 @@ type p2c struct {
 // NewPowerOfTwoChoices returns a P2C balancer.
 func NewPowerOfTwoChoices(bs []*Backend) Balancer { return &p2c{bs: bs, fallback: leastConn{bs: bs}} }
 
-func (p *p2c) Pick(r *http.Request, tried []*Backend, now int64) *Backend {
+func (p *p2c) Pick(r *http.Request, client string, tried []*Backend, now int64) *Backend {
 	n := len(p.bs)
 	if n < 2 {
-		return p.fallback.Pick(r, tried, now)
+		return p.fallback.Pick(r, client, tried, now)
 	}
 	i := rand.IntN(n)
 	j := rand.IntN(n - 1)
@@ -161,5 +176,5 @@ func (p *p2c) Pick(r *http.Request, tried []*Backend, now int64) *Backend {
 	case bu:
 		return b
 	}
-	return p.fallback.Pick(r, tried, now) // both samples unusable: scan
+	return p.fallback.Pick(r, client, tried, now) // both samples unusable: scan
 }

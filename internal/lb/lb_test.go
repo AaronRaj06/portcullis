@@ -30,7 +30,7 @@ func counts(t *testing.T, bal Balancer, n int, mk func(i int) *http.Request) map
 	now := time.Now().UnixNano()
 	c := map[*Backend]int{}
 	for i := 0; i < n; i++ {
-		b := bal.Pick(mk(i), nil, now)
+		b := bal.Pick(mk(i), "", nil, now)
 		if b == nil {
 			t.Fatal("Pick returned nil with healthy backends")
 		}
@@ -49,6 +49,12 @@ func within(t *testing.T, name string, got, want int, tol float64) {
 
 func TestSmoothWeightedSequence(t *testing.T) {
 	bs := backends(5, 1, 1)
+	if got := SmoothOrder([]int{2, 0, 1}); len(got) != 3 || got[0] != 0 || got[1] != 2 || got[2] != 0 {
+		t.Errorf("SmoothOrder(2,0,1) = %v, want [0 2 0] (zero weight never picked)", got)
+	}
+	if SmoothOrder([]int{0, 0}) != nil {
+		t.Error("all-zero weights must give an empty cycle")
+	}
 	seq := smoothSequence(bs, []int{5, 1, 1})
 	got := ""
 	for _, b := range seq {
@@ -115,7 +121,7 @@ func TestLeastConnectionsPrefersIdle(t *testing.T) {
 	bs[2].inflight.Store(3)
 	bal := NewLeastConnections(bs)
 	for i := 0; i < 10; i++ {
-		if b := bal.Pick(req("/"), nil, 0); b != bs[1] {
+		if b := bal.Pick(req("/"), "", nil, 0); b != bs[1] {
 			t.Fatalf("picked %s, want the backend with 1 in flight", b.Addr)
 		}
 	}
@@ -150,13 +156,13 @@ func TestConsistentHashStability(t *testing.T) {
 	for i := 0; i < n; i++ {
 		r := req("/")
 		r.Header.Set("X-User", fmt.Sprintf("u%d", i))
-		a, b := before.Pick(r, nil, 0), after.Pick(r, nil, 0)
+		a, b := before.Pick(r, "", nil, 0), after.Pick(r, "", nil, 0)
 		if a == bs[4] {
 			ownedByRemoved++
 		} else if a != b {
 			moved++ // a key whose backend still exists must not move
 		}
-		if a != before.Pick(r, nil, 0) {
+		if a != before.Pick(r, "", nil, 0) {
 			t.Fatal("same key mapped to different backends")
 		}
 	}
@@ -169,17 +175,24 @@ func TestConsistentHashStability(t *testing.T) {
 func TestCookieAndIPKeys(t *testing.T) {
 	r := req("/")
 	r.AddCookie(&http.Cookie{Name: "sid", Value: "abc"})
-	r.RemoteAddr = "192.0.2.7:5555"
-	if CookieKey("sid")(r) != "abc" || CookieKey("nope")(r) != "" || ClientIPKey(r) != "192.0.2.7" {
+	if CookieKey("sid")(r, "") != "abc" || CookieKey("nope")(r, "") != "" || ClientIPKey(r, "192.0.2.7") != "192.0.2.7" {
 		t.Fatal("key extraction wrong")
 	}
-	// Missing key falls back to client IP, so it is stable per client.
-	bal := NewConsistentHash(backends(1, 1, 1), HeaderKey("X-Missing"), 50)
-	first := bal.Pick(r, nil, 0)
+	// A missing key falls back to the client IP, so it is stable per client and
+	// differs between clients.
+	bal := NewConsistentHash(backends(1, 1, 1, 1, 1), HeaderKey("X-Missing"), 50)
+	first := bal.Pick(r, "192.0.2.7", nil, 0)
 	for i := 0; i < 20; i++ {
-		if bal.Pick(r, nil, 0) != first {
+		if bal.Pick(r, "192.0.2.7", nil, 0) != first {
 			t.Fatal("fallback key not stable")
 		}
+	}
+	owners := map[*Backend]bool{}
+	for i := 0; i < 50; i++ {
+		owners[bal.Pick(r, fmt.Sprintf("198.51.100.%d", i), nil, 0)] = true
+	}
+	if len(owners) < 3 {
+		t.Fatalf("50 clients mapped to %d backends; fallback is not using the client IP", len(owners))
 	}
 }
 
@@ -201,14 +214,14 @@ func TestAllAlgorithmsSkipUnavailable(t *testing.T) {
 			bs[0].SetHealthy(false)
 			bs[1].ejectedUntil.Store(now + int64(time.Hour))
 			for i := 0; i < 200; i++ {
-				if b := bal.Pick(req(fmt.Sprintf("/%d", i)), nil, now); b != bs[2] {
+				if b := bal.Pick(req(fmt.Sprintf("/%d", i)), "", nil, now); b != bs[2] {
 					t.Fatalf("picked %v, want only the available backend", b)
 				}
 			}
-			if b := bal.Pick(req("/"), []*Backend{bs[2]}, now); b != nil {
+			if b := bal.Pick(req("/"), "", []*Backend{bs[2]}, now); b != nil {
 				t.Fatalf("picked %s although it was already tried", b.Addr)
 			}
-			if bal.Pick(req("/"), nil, now+int64(2*time.Hour)) == nil {
+			if bal.Pick(req("/"), "", nil, now+int64(2*time.Hour)) == nil {
 				t.Fatal("ejected backend not re-admitted after its ejection expired")
 			}
 		})
@@ -238,14 +251,14 @@ func TestPassiveEjectionAndReadmission(t *testing.T) {
 		t.Fatal("not ejected after 3 consecutive failures")
 	}
 	for i := 0; i < 20; i++ {
-		if got, _ := p.Pick(req("/"), nil); got == b {
+		if got, _, _ := p.Pick(req("/"), "", nil); got == b {
 			t.Fatal("ejected backend received traffic")
 		}
 	}
 	time.Sleep(60 * time.Millisecond)
 	seen := false
 	for i := 0; i < 4; i++ {
-		if got, _ := p.Pick(req("/"), nil); got == b {
+		if got, _, _ := p.Pick(req("/"), "", nil); got == b {
 			seen = true
 		}
 	}
@@ -258,7 +271,7 @@ func TestPoolNoBackend(t *testing.T) {
 	bs := backends(1)
 	bs[0].SetHealthy(false)
 	p := &Pool{Backends: bs, Balancer: NewRoundRobin(bs)}
-	if _, err := p.Pick(req("/"), nil); !errors.Is(err, ErrNoBackend) {
+	if _, _, err := p.Pick(req("/"), "", nil); !errors.Is(err, ErrNoBackend) {
 		t.Fatalf("err = %v, want ErrNoBackend", err)
 	}
 }
@@ -349,9 +362,66 @@ func BenchmarkPick(b *testing.B) {
 			now := time.Now().UnixNano()
 			b.RunParallel(func(pb *testing.PB) {
 				for pb.Next() {
-					bal.Pick(r, nil, now)
+					bal.Pick(r, "", nil, now)
 				}
 			})
 		})
+	}
+}
+
+func TestEjectionBackoffAndReset(t *testing.T) {
+	bs := backends(1, 1)
+	b := bs[0]
+	p := &Pool{Backends: bs, Balancer: NewRoundRobin(bs), EjectAfter: 1, EjectFor: 40 * time.Millisecond, MaxEjectFor: 100 * time.Millisecond}
+	ejectedFor := func() time.Duration {
+		t.Helper()
+		before := time.Now()
+		if !p.Report(b, true) {
+			t.Fatal("not ejected")
+		}
+		return time.Duration(b.ejectedUntil.Load() - before.UnixNano())
+	}
+	for i, want := range []time.Duration{40, 80, 100, 100} { // linear growth, then capped
+		got := ejectedFor()
+		want *= time.Millisecond
+		if got < want-5*time.Millisecond || got > want+5*time.Millisecond {
+			t.Fatalf("ejection %d lasted %s, want ~%s", i+1, got, want)
+		}
+	}
+	// Serving cleanly for a full EjectFor after re-admission resets the multiplier.
+	time.Sleep(100*time.Millisecond + 50*time.Millisecond)
+	p.Report(b, false)
+	if got := ejectedFor(); got > 45*time.Millisecond {
+		t.Fatalf("after a clean period ejection lasted %s, want the base 40ms", got)
+	}
+}
+
+func TestPanicModeSendsWhenNothingIsAvailable(t *testing.T) {
+	bs := backends(1, 1)
+	for _, b := range bs {
+		b.SetHealthy(false)
+	}
+	p := &Pool{Backends: bs, Balancer: NewRoundRobin(bs)}
+	if _, _, err := p.Pick(req("/"), "", nil); !errors.Is(err, ErrNoBackend) {
+		t.Fatal("without Panic, an all-down pool must fail")
+	}
+	p.Panic = true
+	seen := map[*Backend]bool{}
+	for i := 0; i < 4; i++ {
+		b, panicked, err := p.Pick(req("/"), "", nil)
+		if err != nil || !panicked {
+			t.Fatalf("panic pick: %v %v", panicked, err)
+		}
+		seen[b] = true
+	}
+	if len(seen) != 2 {
+		t.Fatal("panic mode must spread across backends")
+	}
+	if _, _, err := p.Pick(req("/"), "", bs); !errors.Is(err, ErrNoBackend) {
+		t.Fatal("panic mode must still skip already-tried backends")
+	}
+	bs[1].SetHealthy(true)
+	if b, panicked, _ := p.Pick(req("/"), "", nil); panicked || b != bs[1] {
+		t.Fatal("panic mode used although a healthy backend exists")
 	}
 }
