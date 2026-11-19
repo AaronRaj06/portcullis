@@ -61,6 +61,7 @@ func NewTransport(l Limits) *http.Transport {
 		MaxIdleConnsPerHost:   256,
 		IdleConnTimeout:       90 * time.Second,
 		DisableCompression:    true, // pass bytes through as-is; don't decompress what the upstream sent
+		ForceAttemptHTTP2:     true, // HTTP/2 to TLS upstreams (needed because we set a custom DialContext)
 	}
 }
 

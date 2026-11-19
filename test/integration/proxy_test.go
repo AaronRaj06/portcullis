@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/AaronRaj06/portcullis/internal/lb"
 	"github.com/AaronRaj06/portcullis/internal/proxy"
 )
 
@@ -24,16 +25,20 @@ import (
 // The returned shutdown triggers a graceful drain and returns Serve's result.
 func startProxy(t *testing.T, upstream string, mod func(*proxy.Options)) (base string, shutdown func() error) {
 	t.Helper()
-	u, err := url.Parse(upstream)
-	if err != nil {
-		t.Fatal(err)
-	}
-	o := proxy.Options{Upstream: u, Limits: proxy.DefaultLimits}
+	o := proxy.Options{Limits: proxy.DefaultLimits}
 	if mod != nil {
 		mod(&o)
 	}
-	tr := proxy.NewTransport(o.Limits)
-	o.Transport = tr
+	if o.Router == nil {
+		u, err := url.Parse(upstream)
+		if err != nil {
+			t.Fatal(err)
+		}
+		o.Router = mustRouter(t, proxy.Route{Name: "default", Pool: newPool("default", u.Scheme, lb.NewRoundRobin, u.Host)})
+	}
+	if o.Transport == nil {
+		o.Transport = proxy.NewTransport(o.Limits)
+	}
 	h, err := proxy.New(o)
 	if err != nil {
 		t.Fatal(err)
@@ -48,11 +53,34 @@ func startProxy(t *testing.T, upstream string, mod func(*proxy.Options)) (base s
 	var once sync.Once
 	var serr error
 	shutdown = func() error {
-		once.Do(func() { cancel(); serr = <-errc; tr.CloseIdleConnections() })
+		once.Do(func() {
+			cancel()
+			serr = <-errc
+			if tr, ok := o.Transport.(*http.Transport); ok {
+				tr.CloseIdleConnections()
+			}
+		})
 		return serr
 	}
 	t.Cleanup(func() { _ = shutdown() })
 	return "http://" + ln.Addr().String(), shutdown
+}
+
+func newPool(name, scheme string, algo func([]*lb.Backend) lb.Balancer, addrs ...string) *lb.Pool {
+	bs := make([]*lb.Backend, len(addrs))
+	for i, a := range addrs {
+		bs[i] = lb.NewBackend(a, 1)
+	}
+	return &lb.Pool{Name: name, Scheme: scheme, Backends: bs, Balancer: algo(bs)}
+}
+
+func mustRouter(t *testing.T, routes ...proxy.Route) *proxy.Router {
+	t.Helper()
+	rt, err := proxy.NewRouter(routes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rt
 }
 
 func backend(t *testing.T, h http.HandlerFunc) *httptest.Server {

@@ -21,8 +21,12 @@ func TestRunRejectsBadInput(t *testing.T) {
 	for _, args := range [][]string{
 		{},                       // no upstream
 		{"-upstream", "ftp://x"}, // bad scheme
-		{"-upstream", "http://x", "-trusted-proxies", "nope"}, // bad CIDR
-		{"-upstream", "http://x", "-tls-cert", "/missing"},    // unreadable cert
+		{"-upstream", "http://x", "-trusted-proxies", "nope"},              // bad CIDR
+		{"-upstream", "http://x", "-tls-cert", "/missing"},                 // unreadable cert
+		{"-upstream", "http://a:1,https://b:2"},                            // mixed schemes
+		{"-upstream", "http://a:1/base"},                                   // path not supported
+		{"-upstream", "http://a:1", "-lb", "random"},                       // unknown algorithm
+		{"-upstream", "http://a:1", "-lb", "hash", "-hash-key", "header:"}, // empty header name
 	} {
 		if err := run(context.Background(), args, &bytes.Buffer{}); err == nil {
 			t.Errorf("run(%q) = nil, want error", args)

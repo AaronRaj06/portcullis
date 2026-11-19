@@ -38,12 +38,12 @@ func removeHopByHop(h http.Header) {
 	}
 }
 
-// wantsTrailers reports whether the client sent "TE: trailers", the one TE value
-// that must survive forwarding so gRPC-style trailers keep working.
-func wantsTrailers(h http.Header) bool {
-	for _, v := range h["Te"] {
+// hasToken reports whether a comma-separated header (Connection, TE) contains
+// token, case-insensitively.
+func hasToken(h http.Header, name, token string) bool {
+	for _, v := range h[name] {
 		for _, tok := range strings.Split(v, ",") {
-			if strings.EqualFold(textproto.TrimString(tok), "trailers") {
+			if strings.EqualFold(textproto.TrimString(tok), token) {
 				return true
 			}
 		}

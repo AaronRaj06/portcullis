@@ -15,6 +15,14 @@ linters:
   exclusions:
     # Ignore unchecked Close/Flush/Print-style errors, the usual Go convention.
     presets: [std-error-handling]
+    rules:
+      # Load-balancer sampling and health-check jitter need speed, not unpredictability.
+      - path: internal/(lb|health)/
+        text: G404
+        linters: [gosec]
+      # Test fixtures (cookies, handlers echoing input) are not attack surface.
+      - path: _test\.go
+        linters: [gosec]
 formatters:
   enable:
     - gofmt

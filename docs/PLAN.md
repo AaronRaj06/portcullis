@@ -22,13 +22,15 @@ Task breakdown per phase. Each phase ends with: `go test -race ./...`, docs upda
 - [x] TLS termination (TLS 1.2+, AEAD suites, PQ hybrid verified)
 - [x] Integration tests: headers, streaming both ways, client cancel, 502, 504, 413, 408, drain, slowloris
 
-## Phase 2: Routing, load balancing, health
-- [ ] Route matcher: host, exact/prefix path, method, header; specificity ordering
-- [ ] `Balancer` interface; RR, weighted RR (smooth), least-conn, P2C, consistent hash with vnodes (header/cookie/IP/path key)
-- [ ] Active health checks with thresholds and jitter
-- [ ] Passive ejection after N failures, timed re-admission
-- [ ] Retries: idempotent only, only if no request bytes sent; retry budget
-- [ ] Distribution tests per algorithm (chi-square-style tolerance), ejection tests, non-idempotent no-retry test
+## Phase 2: Routing, load balancing, health ✅
+- [x] Route matcher: host (exact/wildcard), exact/prefix path, method, header; Gateway API specificity ordering
+- [x] `Balancer` interface; RR, smooth weighted RR, least-conn, P2C, consistent hash with vnodes (header/cookie/IP/path key); lock-free, 0 allocs/pick
+- [x] Active health checks with rise/fall thresholds and jitter
+- [x] Passive ejection after N gateway failures, timed re-admission
+- [x] Retries: idempotent only, only if no request bytes sent (httptrace), retry budget (ADR 0005)
+- [x] 503 when no backend is available, 404 when no route matches
+- [x] Distribution tests per algorithm (unit + through the proxy), ejection/re-admission, active health, no-retry tests
+- [x] Phase 1 fixes: WebSocket/Upgrade tunnelling, HTTP/2 to TLS upstreams
 
 ## Phase 3: Config and hot reload
 - [ ] YAML schema, defaults, validation with field paths in errors

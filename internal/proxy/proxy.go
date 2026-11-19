@@ -4,17 +4,19 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"net/netip"
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/AaronRaj06/portcullis/internal/lb"
 	"github.com/AaronRaj06/portcullis/internal/metrics"
 )
 
@@ -24,7 +26,7 @@ const statusClientClosed = 499
 
 // Options configures a Handler.
 type Options struct {
-	Upstream       *url.URL          // absolute http(s) URL with no path (Phase 1: one upstream)
+	Router         *Router
 	Transport      http.RoundTripper // usually NewTransport(Limits)
 	TrustedProxies []netip.Prefix    // peers whose X-Forwarded-* and X-Request-Id we believe
 	Limits         Limits
@@ -40,12 +42,8 @@ type Handler struct {
 
 // New validates o and returns a Handler.
 func New(o Options) (*Handler, error) {
-	u := o.Upstream
-	if u == nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		return nil, errors.New("proxy: upstream must be an absolute http or https URL")
-	}
-	if (u.Path != "" && u.Path != "/") || u.RawQuery != "" {
-		return nil, fmt.Errorf("proxy: upstream %q: a path or query is not supported yet", u)
+	if o.Router == nil {
+		return nil, errors.New("proxy: Router is required")
 	}
 	if o.Transport == nil {
 		return nil, errors.New("proxy: Transport is required")
@@ -56,6 +54,13 @@ func New(o Options) (*Handler, error) {
 	return &Handler{o: o}, nil
 }
 
+// reqState is what the access log and metrics record about one request.
+type reqState struct {
+	route, backend, errKind string
+	status, attempts        int
+	written                 int64
+}
+
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	client := clientAddr(r.RemoteAddr)
@@ -63,45 +68,129 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	rid := requestID(r.Header.Get(HeaderRequestID), trusted)
 	rc := http.NewResponseController(w)
 
-	var (
-		status  int
-		written int64
-		errKind string
-	)
+	var st reqState
 	if h.o.Metrics != nil {
 		h.o.Metrics.Start()
 	}
-	// Runs even when we abort with http.ErrAbortHandler below.
+	// Runs even when we abort with http.ErrAbortHandler.
 	defer func() {
 		d := time.Since(start)
 		if h.o.Metrics != nil {
-			h.o.Metrics.Done(r.Method, status, errKind, d)
+			h.o.Metrics.Done(st.route, r.Method, st.status, st.errKind, d)
 		}
 		h.o.Logger.LogAttrs(context.Background(), slog.LevelInfo, "request",
 			slog.String("request_id", rid), slog.String("client", client.String()),
 			slog.String("method", r.Method), slog.String("host", r.Host), slog.String("path", r.URL.Path),
-			slog.Int("status", status), slog.Int64("bytes", written), slog.Duration("duration", d),
-			slog.String("error", errKind))
+			slog.String("route", st.route), slog.String("backend", st.backend), slog.Int("attempts", st.attempts),
+			slog.Int("status", st.status), slog.Int64("bytes", st.written), slog.Duration("duration", d),
+			slog.String("error", st.errKind))
 	}()
 
 	if limit := h.o.Limits.MaxBodyBytes; limit > 0 && r.ContentLength > limit {
-		status, errKind = http.StatusRequestEntityTooLarge, "body_too_large"
-		h.writeError(w, rc, status, rid)
+		st.status, st.errKind = http.StatusRequestEntityTooLarge, "body_too_large"
+		h.writeError(w, rc, st.status, rid)
 		return
 	}
+	route := h.o.Router.Match(r)
+	if route == nil {
+		st.status, st.errKind = http.StatusNotFound, "no_route"
+		h.writeError(w, rc, st.status, rid)
+		return
+	}
+	st.route = route.Name
+	pool := route.Pool
+	if pool.Budget != nil {
+		pool.Budget.Deposit()
+	}
 
-	out, body := h.outbound(w, r, rc, client, trusted, rid)
-	resp, err := h.o.Transport.RoundTrip(out)
-	if err != nil {
-		status, errKind = classify(r.Context(), body, err)
-		if status != statusClientClosed {
-			h.writeError(w, rc, status, rid)
+	upgrade := upgradeType(r.Header)
+	tmpl, body := h.outbound(w, r, rc, client, trusted, rid, upgrade)
+	// Only requests that may be retried pay for the write tracing.
+	retryable := pool.Retries > 0 && pool.Budget != nil && idempotent(r.Method)
+
+	var triedBuf [4]*lb.Backend
+	tried := triedBuf[:0]
+	for {
+		b, err := pool.Pick(r, tried)
+		if err != nil {
+			if st.attempts == 0 { // otherwise keep the previous attempt's status
+				st.status, st.errKind = http.StatusServiceUnavailable, "no_backend"
+			}
+			h.writeError(w, rc, st.status, rid)
+			return
+		}
+		st.backend = b.Addr
+		st.attempts++
+		out, wrote := forBackend(tmpl, pool.Scheme, b, retryable)
+
+		b.Acquire()
+		resp, err := h.o.Transport.RoundTrip(out)
+		if err == nil {
+			defer b.Release()
+			h.report(pool, b, gatewayFailure(resp.StatusCode), metrics.StatusClass(resp.StatusCode))
+			if resp.StatusCode == http.StatusSwitchingProtocols {
+				st.status, st.errKind = h.serveUpgrade(w, rc, r, resp, upgrade, rid)
+				return
+			}
+			h.serveResponse(w, rc, r, resp, rid, &st)
+			return
+		}
+		b.Release()
+
+		st.status, st.errKind = classify(r.Context(), body, err)
+		upstreamFault := st.status == http.StatusBadGateway || st.status == http.StatusGatewayTimeout
+		if upstreamFault {
+			h.report(pool, b, true, st.errKind)
+		}
+		// Retry only if: the method is idempotent, nothing reached the backend (no
+		// headers written, no body read), attempts remain, and the budget allows it.
+		if upstreamFault && retryable && !wrote.Load() && body.untouched() &&
+			len(tried) < pool.Retries && pool.Budget.Withdraw() {
+			tried = append(tried, b)
+			if h.o.Metrics != nil {
+				h.o.Metrics.Retry(pool.Name)
+			}
+			continue
+		}
+		if st.status != statusClientClosed {
+			h.writeError(w, rc, st.status, rid)
 		}
 		return
 	}
-	defer resp.Body.Close()
-	status = resp.StatusCode
+}
 
+// report feeds passive health and metrics.
+func (h *Handler) report(pool *lb.Pool, b *lb.Backend, failed bool, result string) {
+	ejected := pool.Report(b, failed)
+	if h.o.Metrics != nil {
+		h.o.Metrics.Attempt(pool.Name, b.Addr, result)
+		if ejected {
+			h.o.Metrics.Ejected(pool.Name, b.Addr)
+		}
+	}
+	if ejected {
+		h.o.Logger.Warn("backend ejected", "pool", pool.Name, "backend", b.Addr, "for", pool.EjectFor.String())
+	}
+}
+
+// gatewayFailure is a response that says the backend (or something behind it)
+// is unwell, as opposed to an application error like 500.
+func gatewayFailure(code int) bool {
+	return code == http.StatusBadGateway || code == http.StatusServiceUnavailable || code == http.StatusGatewayTimeout
+}
+
+// idempotent methods may be sent twice without changing the outcome (RFC 9110 §9.2.2).
+func idempotent(m string) bool {
+	switch m {
+	case http.MethodGet, http.MethodHead, http.MethodOptions, http.MethodTrace, http.MethodPut, http.MethodDelete:
+		return true
+	}
+	return false
+}
+
+func (h *Handler) serveResponse(w http.ResponseWriter, rc *http.ResponseController, r *http.Request, resp *http.Response, rid string, st *reqState) {
+	defer resp.Body.Close()
+	st.status = resp.StatusCode
 	removeHopByHop(resp.Header)
 	hdr := w.Header()
 	for k, vv := range resp.Header {
@@ -112,15 +201,16 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.extendWrite(rc)
 	w.WriteHeader(resp.StatusCode)
 
-	written, err = h.copyBody(w, rc, resp)
+	var err error
+	st.written, err = h.copyBody(w, rc, resp)
 	if err != nil {
 		if r.Context().Err() != nil {
-			errKind = "client_closed"
+			st.errKind = "client_closed"
 			return
 		}
 		// Headers are already sent, so we cannot change the status. Abort the
 		// connection so the client sees a truncated response, not a complete-looking one.
-		errKind = "body_copy"
+		st.errKind = "body_copy"
 		panic(http.ErrAbortHandler)
 	}
 	for k, vv := range resp.Trailer {
@@ -128,15 +218,19 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// outbound builds the upstream request. It shares the client's context, so a
-// client disconnect cancels the upstream request too.
+// outbound builds the request template shared by all attempts. It carries the
+// client's context, so a client disconnect cancels the upstream request too.
 func (h *Handler) outbound(w http.ResponseWriter, r *http.Request, rc *http.ResponseController,
-	client netip.Addr, trusted bool, rid string) (*http.Request, *clientBody) {
+	client netip.Addr, trusted bool, rid, upgrade string) (*http.Request, *clientBody) {
 	hdr := r.Header.Clone()
-	te := wantsTrailers(hdr)
+	te := hasToken(hdr, "Te", "trailers")
 	removeHopByHop(hdr)
 	if te {
 		hdr.Set("Te", "trailers")
+	}
+	if upgrade != "" { // Connection and Upgrade are hop-by-hop, but an upgrade must be re-requested on the next hop
+		hdr.Set("Connection", "Upgrade")
+		hdr.Set("Upgrade", upgrade)
 	}
 	setForwarded(hdr, r, client, trusted)
 	hdr.Set(HeaderRequestID, rid)
@@ -145,11 +239,8 @@ func (h *Handler) outbound(w http.ResponseWriter, r *http.Request, rc *http.Resp
 	}
 
 	out := &http.Request{
-		Method: r.Method,
-		URL: &url.URL{
-			Scheme: h.o.Upstream.Scheme, Host: h.o.Upstream.Host,
-			Path: r.URL.Path, RawPath: r.URL.RawPath, RawQuery: r.URL.RawQuery,
-		},
+		Method:        r.Method,
+		URL:           &url.URL{Path: r.URL.Path, RawPath: r.URL.RawPath, RawQuery: r.URL.RawQuery},
 		Header:        hdr,
 		Host:          r.Host,
 		ContentLength: r.ContentLength,
@@ -163,6 +254,22 @@ func (h *Handler) outbound(w http.ResponseWriter, r *http.Request, rc *http.Resp
 		out.Body = body
 	}
 	return out.WithContext(r.Context()), body
+}
+
+// forBackend points a copy of tmpl at backend b. If track is set, wrote becomes
+// true once request headers have been written to the backend; after that, a
+// retry could make the backend process the request twice.
+func forBackend(tmpl *http.Request, scheme string, b *lb.Backend, track bool) (*http.Request, *atomic.Bool) {
+	wrote := new(atomic.Bool)
+	ctx := tmpl.Context()
+	if track {
+		ctx = httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{WroteHeaders: func() { wrote.Store(true) }})
+	}
+	out := tmpl.WithContext(ctx)
+	u := *tmpl.URL
+	u.Scheme, u.Host = scheme, b.Addr
+	out.URL = &u
+	return out, wrote
 }
 
 var bufPool = sync.Pool{New: func() any { b := make([]byte, 32<<10); return &b }}
@@ -252,15 +359,17 @@ func classify(ctx context.Context, body *clientBody, err error) (int, string) {
 //   - clears that deadline once the body is fully read (successfully), because net/http starts a
 //     background read on the connection then, and a deadline firing there would
 //     cancel the whole request while we wait for the upstream,
-//   - remembers the first read error so classify can blame the client, not the upstream.
+//   - remembers the first read error so classify can blame the client, not the upstream,
+//   - ignores Close, so a failed attempt that never read the body leaves it
+//     usable for a retry. net/http closes the real body after the handler returns.
 //
-// The Transport reads it from its own goroutine, hence the mutex.
+// The Transport reads it from its own goroutine, hence the mutex and atomic.
 type clientBody struct {
 	r    io.ReadCloser
 	rc   *http.ResponseController
 	idle time.Duration
 	want int64 // Content-Length, or -1
-	got  int64
+	got  atomic.Int64
 
 	mu  sync.Mutex
 	err error
@@ -271,10 +380,10 @@ func (b *clientBody) Read(p []byte) (int, error) {
 		_ = b.rc.SetReadDeadline(time.Now().Add(b.idle))
 	}
 	n, err := b.r.Read(p)
-	b.got += int64(n)
+	got := b.got.Add(int64(n))
 	// Clear only on success. After an error the expired deadline must stay, or
-	// Close (which drains the unread body) would block on a stalled client.
-	if b.idle > 0 && (err == io.EOF || (err == nil && b.want > 0 && b.got >= b.want)) {
+	// the server's drain of the unread body would block on a stalled client.
+	if b.idle > 0 && (err == io.EOF || (err == nil && b.want > 0 && got >= b.want)) {
 		_ = b.rc.SetReadDeadline(time.Time{})
 	}
 	if err != nil && err != io.EOF {
@@ -287,7 +396,7 @@ func (b *clientBody) Read(p []byte) (int, error) {
 	return n, err
 }
 
-func (b *clientBody) Close() error { return b.r.Close() }
+func (b *clientBody) Close() error { return nil }
 
 func (b *clientBody) failure() error {
 	if b == nil {
@@ -297,3 +406,6 @@ func (b *clientBody) failure() error {
 	defer b.mu.Unlock()
 	return b.err
 }
+
+// untouched reports whether no body bytes were consumed, so the body can be resent.
+func (b *clientBody) untouched() bool { return b == nil || (b.got.Load() == 0 && b.failure() == nil) }

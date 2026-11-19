@@ -7,49 +7,93 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+
+	"github.com/AaronRaj06/portcullis/internal/lb"
 )
 
-// Metrics holds the data-plane collectors. Route and upstream labels arrive in Phase 2.
+// Metrics holds the data-plane collectors. Label values come only from config
+// (route, pool, backend names) or fixed sets (method, code, kind), so the number
+// of time series is bounded.
 type Metrics struct {
-	requests *prometheus.CounterVec
-	duration *prometheus.HistogramVec
-	errors   *prometheus.CounterVec
-	inFlight prometheus.Gauge
+	requests  *prometheus.CounterVec
+	duration  *prometheus.HistogramVec
+	errors    *prometheus.CounterVec
+	attempts  *prometheus.CounterVec
+	retries   *prometheus.CounterVec
+	ejections *prometheus.CounterVec
+	inFlight  prometheus.Gauge
 }
 
 // New creates the collectors and registers them on reg.
 func New(reg prometheus.Registerer) *Metrics {
 	m := &Metrics{
 		requests: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Name: "portcullis_requests_total", Help: "Requests handled, by method and status code.",
-		}, []string{"method", "code"}),
+			Name: "portcullis_requests_total", Help: "Requests handled, by route, method and status code.",
+		}, []string{"route", "method", "code"}),
 		duration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Name: "portcullis_request_duration_seconds", Help: "Time from request start to end of response body.",
 			Buckets: []float64{.0005, .001, .0025, .005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10},
-		}, []string{"method"}),
+		}, []string{"route"}),
 		errors: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "portcullis_proxy_errors_total", Help: "Requests that failed in the proxy, by kind.",
 		}, []string{"kind"}),
+		attempts: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "portcullis_upstream_attempts_total", Help: "Attempts sent to a backend, by result (status class or error kind).",
+		}, []string{"pool", "backend", "result"}),
+		retries: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "portcullis_retries_total", Help: "Retries performed, by pool.",
+		}, []string{"pool"}),
+		ejections: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "portcullis_backend_ejections_total", Help: "Passive ejections after consecutive gateway failures.",
+		}, []string{"pool", "backend"}),
 		inFlight: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "portcullis_requests_in_flight", Help: "Requests currently being served.",
 		}),
 	}
-	reg.MustRegister(m.requests, m.duration, m.errors, m.inFlight)
+	reg.MustRegister(m.requests, m.duration, m.errors, m.attempts, m.retries, m.ejections, m.inFlight)
 	return m
 }
 
 // Start marks a request as in flight.
 func (m *Metrics) Start() { m.inFlight.Inc() }
 
-// Done records a finished request. errKind is "" on success.
-func (m *Metrics) Done(method string, code int, errKind string, d time.Duration) {
+// Done records a finished request. route is "" when nothing matched; errKind is "" on success.
+func (m *Metrics) Done(route, method string, code int, errKind string, d time.Duration) {
 	m.inFlight.Dec()
-	method = Method(method)
-	m.requests.WithLabelValues(method, strconv.Itoa(code)).Inc()
-	m.duration.WithLabelValues(method).Observe(d.Seconds())
+	if route == "" {
+		route = "none"
+	}
+	m.requests.WithLabelValues(route, Method(method), strconv.Itoa(code)).Inc()
+	m.duration.WithLabelValues(route).Observe(d.Seconds())
 	if errKind != "" {
 		m.errors.WithLabelValues(errKind).Inc()
 	}
+}
+
+// Attempt records one try against a backend. result is a status class ("2xx") or an error kind.
+func (m *Metrics) Attempt(pool, backend, result string) {
+	m.attempts.WithLabelValues(pool, backend, result).Inc()
+}
+
+// Retry records a retry in pool.
+func (m *Metrics) Retry(pool string) { m.retries.WithLabelValues(pool).Inc() }
+
+// Ejected records a passive ejection.
+func (m *Metrics) Ejected(pool, backend string) { m.ejections.WithLabelValues(pool, backend).Inc() }
+
+// StatusClass maps 200 → "2xx" without allocating.
+func StatusClass(code int) string {
+	switch code / 100 {
+	case 1:
+		return "1xx"
+	case 2:
+		return "2xx"
+	case 3:
+		return "3xx"
+	case 4:
+		return "4xx"
+	}
+	return "5xx"
 }
 
 // Method maps any non-standard method to "OTHER" so a client cannot create
@@ -61,4 +105,35 @@ func Method(m string) string {
 		return m
 	}
 	return "OTHER"
+}
+
+// RegisterBackendHealth exports portcullis_backend_up{pool,backend}: 1 if the
+// backend is healthy and not ejected. It is read from live state at scrape
+// time, so it is never stale (ejections expire without any event), and it
+// follows config reloads because pools() is called on every scrape.
+func RegisterBackendHealth(reg prometheus.Registerer, pools func() []*lb.Pool) {
+	reg.MustRegister(&backendCollector{
+		desc:  prometheus.NewDesc("portcullis_backend_up", "1 if the backend may receive traffic (healthy and not ejected).", []string{"pool", "backend"}, nil),
+		pools: pools,
+	})
+}
+
+type backendCollector struct {
+	desc  *prometheus.Desc
+	pools func() []*lb.Pool
+}
+
+func (c *backendCollector) Describe(ch chan<- *prometheus.Desc) { ch <- c.desc }
+
+func (c *backendCollector) Collect(ch chan<- prometheus.Metric) {
+	now := time.Now().UnixNano()
+	for _, p := range c.pools() {
+		for _, b := range p.Backends {
+			v := 0.0
+			if b.Available(now) {
+				v = 1
+			}
+			ch <- prometheus.MustNewConstMetric(c.desc, prometheus.GaugeValue, v, p.Name, b.Addr)
+		}
+	}
 }

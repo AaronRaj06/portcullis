@@ -24,11 +24,15 @@ func TestRemoveHopByHop(t *testing.T) {
 	}
 }
 
-func TestWantsTrailers(t *testing.T) {
+func TestHasToken(t *testing.T) {
 	for v, want := range map[string]bool{"trailers": true, "gzip, Trailers": true, "gzip": false, "": false} {
-		if got := wantsTrailers(http.Header{"Te": {v}}); got != want {
-			t.Errorf("wantsTrailers(%q) = %v, want %v", v, got, want)
+		if got := hasToken(http.Header{"Te": {v}}, "Te", "trailers"); got != want {
+			t.Errorf("hasToken(%q) = %v, want %v", v, got, want)
 		}
+	}
+	up := http.Header{"Connection": {"keep-alive, Upgrade"}, "Upgrade": {"websocket"}}
+	if upgradeType(up) != "websocket" || upgradeType(http.Header{"Upgrade": {"websocket"}}) != "" {
+		t.Error("upgradeType must require both Connection: upgrade and Upgrade")
 	}
 }
 

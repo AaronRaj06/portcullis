@@ -6,11 +6,11 @@ A small, production-minded application delivery and security stack in Go:
 - **PolicyScript**: a small, safe rule language the proxy runs on every request and response, inspired by F5 iRules.
 - **`portcullis-controller`**: a Kubernetes controller that reads Gateway API resources and programs the data plane (the *control plane*).
 
-> **Status: Phase 1 (core proxy).** Single-upstream reverse proxy with streaming, correct proxy headers, timeouts, TLS, graceful shutdown, request IDs and metrics. See [docs/PLAN.md](docs/PLAN.md) and [docs/ROADMAP.md](docs/ROADMAP.md).
+> **Status: Phase 2 (routing, load balancing, health).** Reverse proxy with Gateway-API-style routing, five hand-written load balancers, active and passive health checks, safe retries with a budget, WebSockets, TLS, graceful shutdown, request IDs and metrics. See [docs/PLAN.md](docs/PLAN.md) and [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ```sh
 make build
-./bin/portcullis -upstream http://127.0.0.1:9000 -listen :8080   # admin: 127.0.0.1:9901/metrics
+./bin/portcullis -upstream http://127.0.0.1:9000,http://127.0.0.1:9001 -lb p2c -listen :8080   # admin: 127.0.0.1:9901/metrics
 ./bin/portcullis -help                                            # all flags and timeouts
 ```
 

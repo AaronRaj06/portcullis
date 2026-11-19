@@ -10,12 +10,19 @@ What is deferred, and why. Anything not finished is listed here, never presented
 
 ## Deferred from Phase 1
 
-- **WebSockets / `Upgrade`.** `Upgrade` is stripped as a hop-by-hop header, so WebSocket handshakes do not pass through yet. Proper support means handling `101 Switching Protocols` and splicing both directions.
-- **Upstream HTTP/2 and h2c.** The upstream side speaks HTTP/1.1 only. Clients can use HTTP/2 over TLS.
-- **Upstream base path.** `-upstream` must have no path (`New` rejects one) instead of joining paths silently.
-- **503.** There is no "no healthy backend" state until pools exist (Phase 2).
+- **Upstream h2c** (HTTP/2 without TLS). HTTP/2 to TLS upstreams works; cleartext h2 would need `Transport.Protocols` and has no user yet (gRPC is not a goal).
 - **Config file and full admin API** (`/readyz`, `GET/PUT /config`, `/reload`, pprof). Flags only until Phase 3; the admin port serves only `/metrics` and `/healthz`.
-- **Per-request allocations not measured yet.** The header clone, `WithContext` copy and label formatting all allocate. Phase 4 measures with `-benchmem` and optimises.
+- **Per-request allocations not measured yet** (header clone, request copies, label formatting). Phase 4 measures with `-benchmem` and optimises.
+- ~~WebSockets~~ fixed in Phase 2. ~~Upstream base path~~ obsolete: backends are `host:port`; path rewriting arrives with PolicyScript's `rewrite_path`. ~~503~~ done in Phase 2.
+
+## Deferred from Phase 2
+
+- **Multiple routes, weights and per-route upstream TLS from the CLI.** The flags build one catch-all route with equal weights. Phase 3's YAML config exposes everything the Go API already supports.
+- **Weighted traffic splitting across pools** (one route → 90% pool A, 10% pool B), needed for Gateway API `backendRefs` canaries. Planned with the controller translation in Phase 6.
+- **Panic mode / max ejection percentage.** If every backend gets ejected, we return 503 rather than ignoring ejection the way Envoy's panic threshold does.
+- **Exponential back-off for repeatedly ejected backends.** Re-admission is a fixed `EjectFor`.
+- **Upgraded connections ignore graceful drain.** Hijacked tunnels are not tracked by `Shutdown`; they close when the process exits.
+- **Hash key `ip` uses the TCP peer,** not a trusted `X-Forwarded-For`. Behind another load balancer, use `header:` or `cookie:`.
 
 ## Explicit non-goals
 

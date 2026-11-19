@@ -70,3 +70,44 @@ Two net/http subtleties, both found by tests and both now covered by regression 
 2. **A body-read error cancels the request context.** I originally checked "context cancelled → client gone, send nothing" first. But net/http cancels the context *because* the body read failed, so a 408 was being reported as a silent 499. Fix: check the captured body error before the context.
 
 A third issue was caught by design review before it shipped, and its regression test passes: once the body is fully read, net/http starts a background read on the connection. If our per-read deadline were still set, it would fire during a slow upstream response and cancel the request. `clientBody` clears the deadline the moment the last byte is read (`TestSlowUpstreamAfterBodyIsNotCancelled`).
+
+## Phase 2: Routing, load balancing and health
+
+### Concepts, in plain language
+
+- **Pool / backend / balancer.** A *pool* is a group of interchangeable servers (*backends*) for one service. A *balancer* decides which backend gets the next request.
+- **Round robin / weighted round robin.** Take turns. Weighted means a backend with weight 3 gets three turns for every one a weight-1 backend gets. *Smooth* weighting interleaves the turns (A B A A) instead of bursting (A A A B), so no backend gets a burst.
+- **Least connections.** Send to whoever is busiest the least right now (the fewest requests in flight). It's good when requests take very different amounts of time.
+- **Power of two choices (P2C).** Pick two backends at random and use the less busy one. Surprisingly, this gets most of the benefit of least-connections at O(1) cost. Because each proxy samples randomly, many proxies don't all pile onto the same "least loaded" backend at once (*herding*).
+- **Consistent hashing.** Map a key (user ID, cookie, IP) to a backend so the same key keeps going to the same place: session affinity, warm caches. "Consistent" means that when one backend leaves, only its own keys move; with `hash % N`, nearly every key would move. *Virtual nodes* give each backend many points on the ring so the shares even out.
+- **Active vs passive health checks.** Active: we poll `/healthz` on a timer. Passive: we watch real traffic, and after N consecutive failures we stop sending to that backend for a while (*ejection*, or *outlier detection* in Envoy terms). Active catches dead backends with no traffic; passive reacts within a few requests.
+- **Hysteresis.** Requiring several failures to mark a backend down, and several passes to bring it back, so it doesn't flap on one lost packet.
+- **Idempotent.** Doing it twice has the same effect as doing it once (GET, PUT, DELETE). POST usually isn't. Charging a card twice is the classic bug.
+- **Retry budget.** A cap on retries as a share of traffic, so retries can't multiply load during an outage (*retry storm*).
+- **WebSocket upgrade.** The client asks to switch an HTTP/1.1 connection to another protocol. After the backend's `101 Switching Protocols`, the proxy becomes a dumb two-way pipe.
+
+### Trade-offs and rejected alternatives
+
+- **Lock-free balancers vs a mutex.** NGINX's smooth WRR updates shared counters on every pick, which normally needs a lock. We run the algorithm once when the pool is built, save one full cycle, and walk it with an atomic counter. Same output, no lock, 0 allocations.
+- **Precomputed cycle vs live smooth WRR when a backend is down.** NGINX recomputes over live backends only. Our cycle keeps the dead backend's slots, and we re-draw those slots at random. That costs a random number on the failure path, but keeps the shares proportional; the first version did a linear scan and over-sent to the next backend (a test caught it).
+- **Retrying only when headers were never written** (ADR 0005), vs Envoy-style "retry on 5xx". Stricter and less effective, but it can never duplicate a request a backend already saw.
+- **Optimistic start** (new backends healthy) vs pessimistic. We avoid a 503 window on startup. The risk is a few failed requests to a backend that is dead from the start, and passive ejection and retries absorb those.
+- **Counting 502/503/504 but not 500 toward ejection.** A 500 is usually one bad request or one buggy endpoint. Ejecting a whole host for it would turn one bug into lost capacity.
+- **Gateway API precedence** for routing, rather than first-match-in-file order. Phase 6 translates HTTPRoutes directly, so the data plane should already behave the way the spec says.
+
+### Likely interview questions
+
+1. **How does consistent hashing limit disruption, and how did you pick the virtual node count?** Each backend owns `vnodes × weight` points on a 64-bit ring, and a key goes to the next point clockwise. Removing a backend only reassigns its own arcs: `TestConsistentHashStability` removes 1 of 5 and checks that zero keys move between survivors. On vnodes, I measured instead of guessing: worst-case share off fair was 16% at 160, 4.7% at 640 and 1.2% at 2560, close to 1/√v. 640 is the default.
+2. **Why P2C over least-connections?** Least-connections scans every backend (O(n)), and in a fleet of proxies they all see the same idle backend and herd onto it. P2C is O(1) with randomness, so different proxies pick differently, and it still avoids hot backends. `TestP2CAvoidsLoadedBackend` shows a backend with 100 in flight never gets picked. With two backends P2C always compares both, so it behaves exactly like least-connections (`TestLoadAwareBalancersThroughProxy`).
+3. **When do you retry, and how do you prevent a retry storm?** Only for idempotent methods, only if `httptrace` shows no request headers were written to the backend, only to a backend not yet tried, and only if the token-bucket budget allows: +0.2 tokens per request, −1 per retry. `TestRetryBudgetCapsAmplification` sends 20 requests to an all-dead pool and asserts exactly 23 attempts.
+4. **How do active and passive health interact?** A backend gets traffic only if both allow it: actively healthy *and* `now >= ejectedUntil`. Re-admission after ejection needs no timer or event, because the comparison flips on its own. `portcullis_backend_up` is computed at scrape time for the same reason.
+5. **How is routing precedence decided?** As in Gateway API: hostname specificity first (exact > longest wildcard > any), then exact path > longest prefix > method > header count. Routes are pre-sorted per hostname bucket, so matching is a map lookup plus a short scan: ~60 ns, 0 allocations.
+
+### What went wrong or surprised us
+
+- **Our own tests found three bugs on the first run.**
+  1. Round-robin over-sent to the backend after a dead one (16.6k vs 13.4k of 30k); fixed with random re-draws.
+  2. A retry budget built with `burst = 0` could never hold a token, so it never allowed a single retry; the cap is now at least one token.
+  3. Consistent hashing was 16% off fair. That one was *not* a bug: I measured arc shares directly, found ring variance at 160 vnodes, and raised the default instead of loosening the test.
+- **A test that couldn't fail.** The Phase 2 integration tests all passed on the first run, so I mutation-tested the guards: delete each retry condition and check its test fails. Five did. The sixth, clearing the write deadline on hijacked WebSocket connections, survived. Reading `net/http/server.go` showed `hijackLocked` already calls `SetDeadline(time.Time{})`, so the line was dead code. I deleted it and kept the test, which still proves idle tunnels survive `WriteTimeout`.
+- **Allocation hiding in plain sight.** `net.SplitHostPort` allocates an error for every `Host` header without a port (the common case). A byte scan took routing from 1 allocation to 0.
