@@ -33,11 +33,13 @@ Task breakdown per phase. Each phase ends with: `go test -race ./...`, docs upda
 - [x] Phase 1 fixes: WebSocket/Upgrade tunnelling, HTTP/2 to TLS upstreams
 - [x] Follow-ups: weighted split across pools, panic mode, ejection back-off, tunnel drain, per-pool transport (CA, h2c), real-client hashing, CLI weights, handler allocation baseline
 
-## Phase 3: Config and hot reload
-- [ ] YAML schema, defaults, validation with field paths in errors
-- [ ] Immutable compiled snapshot behind `atomic.Pointer`; version + hash
-- [ ] SIGHUP reload; admin API: `/healthz`, `/readyz`, `/metrics`, `GET/PUT /config`, `POST /reload`, optional pprof, bearer token
-- [ ] Test: sustained load + 100 reloads, count failed requests (target 0); invalid config never replaces good one
+## Phase 3: Config and hot reload ✅
+- [x] YAML/JSON schema, strict parsing, defaults, validation reporting every problem with its field path
+- [x] Immutable compiled snapshot behind `atomic.Pointer`; version + canonical hash + generation; no-op on equal hash
+- [x] Backend health/ejection state carried across reloads; health checks restarted per snapshot
+- [x] SIGHUP reload; admin API: `/healthz`, `/readyz`, `/metrics`, `GET/PUT /config`, `POST /reload`, optional pprof, bearer token (constant-time)
+- [x] Test: 16 clients + 100 reloads (10 invalid): 0 failed requests; invalid config never replaces a good one; in-flight requests finish on the old snapshot
+- [x] CLI flags converted to the same config path; end-to-end SIGHUP/PUT test through `run()`
 
 ## Phase 4: Benchmarks (v0.1.0)
 - [ ] Install wrk2 or vegeta, nginx

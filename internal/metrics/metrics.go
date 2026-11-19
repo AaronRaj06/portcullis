@@ -22,6 +22,9 @@ type Metrics struct {
 	retries   *prometheus.CounterVec
 	ejections *prometheus.CounterVec
 	panics    *prometheus.CounterVec
+	reloads   *prometheus.CounterVec
+	gen       prometheus.Gauge
+	lastOK    prometheus.Gauge
 	inFlight  prometheus.Gauge
 }
 
@@ -50,11 +53,20 @@ func New(reg prometheus.Registerer) *Metrics {
 		panics: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "portcullis_panic_picks_total", Help: "Picks made in panic mode because no backend was available.",
 		}, []string{"pool"}),
+		reloads: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "portcullis_config_reloads_total", Help: "Config apply attempts, by result (success, unchanged, error).",
+		}, []string{"result"}),
+		gen: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "portcullis_config_generation", Help: "Generation of the config serving traffic; increments on every successful apply.",
+		}),
+		lastOK: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "portcullis_config_last_success_timestamp_seconds", Help: "Unix time of the last successful config apply.",
+		}),
 		inFlight: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "portcullis_requests_in_flight", Help: "Requests currently being served.",
 		}),
 	}
-	reg.MustRegister(m.requests, m.duration, m.errors, m.attempts, m.retries, m.ejections, m.panics, m.inFlight)
+	reg.MustRegister(m.requests, m.duration, m.errors, m.attempts, m.retries, m.ejections, m.panics, m.reloads, m.gen, m.lastOK, m.inFlight)
 	return m
 }
 
@@ -84,6 +96,17 @@ func (m *Metrics) Retry(pool string) { m.retries.WithLabelValues(pool).Inc() }
 
 // Ejected records a passive ejection.
 func (m *Metrics) Ejected(pool, backend string) { m.ejections.WithLabelValues(pool, backend).Inc() }
+
+// ConfigReload records one config apply attempt.
+func (m *Metrics) ConfigReload(result string) {
+	m.reloads.WithLabelValues(result).Inc()
+	if result == "success" {
+		m.lastOK.SetToCurrentTime()
+	}
+}
+
+// ConfigGeneration records the generation now serving.
+func (m *Metrics) ConfigGeneration(g uint64) { m.gen.Set(float64(g)) }
 
 // Panic records a panic-mode pick.
 func (m *Metrics) Panic(pool string) { m.panics.WithLabelValues(pool).Inc() }

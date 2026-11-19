@@ -20,6 +20,28 @@ This file explains *how* Portcullis works; ADRs in `adr/` explain *why* a choice
 - **Data plane**: the process that actually handles user traffic. It must be fast and must never stop serving because of a bad config.
 - **Control plane**: the process that decides what the data plane should do, and tells it. It can be slow; it must be correct.
 
+## Configuration and hot reload (ADR 0007)
+
+```
+ file ──SIGHUP / POST /reload──┐
+                               ▼
+ controller ──PUT /config──▶ Parse (strict) → Validate (all errors, with paths)
+                               │ error: 400 + problems; old snapshot keeps serving
+                               ▼
+                             Compile → Snapshot{Router, pools, transports, hash, version}
+                               │ backends inherit health/ejection state by (pool, address)
+                               ▼
+                         atomic.Pointer.Swap ──▶ new requests
+                               │                 in-flight requests finish on the old one
+                               └─ stop old health checks, start new ones
+```
+
+- **Process-level (flags, restart):** `-listen`, `-admin-listen`, `-tls-cert/-key`, timeouts and limits, `-admin-token-file`, `-pprof`.
+- **Traffic (file or API, live):** `trustedProxies`, `pools` (scheme, lb, hashKey, backends, healthCheck, ejection, retries, panic, tls), `routes` (hosts, path, pathType, methods, headers, backends with weights). Example: `docs/examples/portcullis.yaml`.
+- `-upstream` and friends are shorthand: they build a one-route config and go through the same `Manager.ApplyConfig` path.
+- **Admin API** (`internal/admin`): `/healthz` (liveness), `/readyz` (a config is serving and we are not draining), `/metrics`, `GET/PUT /config`, `POST /reload`, optional `/debug/pprof/`. On SIGTERM `/readyz` turns 503 first, the proxy drains, and the admin server stops last.
+- **Metrics:** `portcullis_config_generation`, `portcullis_config_reloads_total{result=success|unchanged|error}`, `portcullis_config_last_success_timestamp_seconds`.
+
 ## Request lifecycle
 
 `internal/proxy.Handler.ServeHTTP`, in order:
@@ -127,14 +149,14 @@ See ADR 0005. In short: idempotent + nothing reached the backend (`httptrace` `W
 
 | Package | Owns | Depends on |
 |---|---|---|
-| `config` | schema, validation, immutable snapshot | `policy` (to validate scripts) |
+| `config` | schema, strict parsing, validation, compile to snapshot, Manager (swap + health lifecycle) | `proxy`, `lb`, `health`, `metrics` (later `policy`) |
 | `proxy` | routing, forwarding, retries, upgrades, headers, streaming, errors, server/transport/TLS setup | `lb`, `metrics` (later `config`, `policy`) |
 | `lb` | `Balancer` interface and algorithms | – |
 | `health` | active checks (passive ejection is in `lb.Pool`) | `lb` |
 | `policy` | PolicyScript language | `ratelimit` |
 | `ratelimit` | token buckets | – |
 | `metrics` | Prometheus collectors | `lb` (backend health collector) |
-| `admin` | admin HTTP API | `config`, `metrics` |
+| `admin` | admin HTTP API | `config` |
 | `controller` | Gateway API reconciliation, snapshot push | `config`, `policy` |
 
 Rule: `proxy` is the only package on the hot path that sees the whole request; everything else gets small, explicit inputs so it can be unit-tested alone.

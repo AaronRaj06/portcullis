@@ -10,7 +10,6 @@ What is deferred, and why. Anything not finished is listed here, never presented
 
 ## Deferred from Phase 1
 
-- **Config file and full admin API** (`/readyz`, `GET/PUT /config`, `/reload`, pprof). This *is* Phase 3. The CLI covers one catch-all route (now with weights, h2c and a private CA); multiple routes and splits are available through the Go API until the YAML config lands.
 - **Allocation optimisation.** Baseline measured now (`BenchmarkHandler`, in-memory transport): **~4.1 µs, 3.4 KB, 43 allocs per request**, including `httptest.NewRecorder`'s own. Optimising is Phase 4, which needs this "before" number.
 - **Upgrades from HTTP/2 clients** (RFC 8441 extended CONNECT). HTTP/2 connections cannot be hijacked, so a WebSocket over an HTTP/2 client connection gets 502; browsers fall back to HTTP/1.1.
 
@@ -29,7 +28,15 @@ What is deferred, and why. Anything not finished is listed here, never presented
 | No ejection back-off | linear `EjectFor × n`, capped, resets when clean (ADR 0006) |
 | Tunnels ignored the drain | `Handler.Drain`, called by `Serve` |
 | Hash on `ip` used the TCP peer | real client from trusted `X-Forwarded-For` |
-| CI never ran on GitHub | see README (pending a repository) |
+| Config file / admin API | Phase 3 (ADR 0007) |
+| CI never ran on GitHub | private repo created; push blocked until the `gh` token has the `workflow` scope |
+
+## Deferred from Phase 3
+
+- **Hot-reloading process-level settings** (listeners, TLS certificate, timeouts). Restart needed (ADR 0007). Certificate rotation without restart (`GetCertificate` reloading files) is a natural next step.
+- **Ordering of pushes.** `version` is opaque, so the data plane cannot tell that an old snapshot arrived after a newer one. The controller pushes sequentially and retries only its latest snapshot; a monotonic `generation` precondition (`If-Match`) would make this explicit.
+- **Pool transports are rebuilt on every reload** (h2c / private-CA pools only), costing new upstream handshakes. Reusing a transport when its TLS settings are unchanged is an easy optimisation.
+- **The hash covers the config text, not referenced files.** Changing the contents of a `caFile` without changing the config is treated as "unchanged".
 
 ## Explicit non-goals
 

@@ -31,6 +31,17 @@ func (b *Backend) Available(now int64) bool {
 	return !b.down.Load() && now >= b.ejectedUntil.Load()
 }
 
+// InheritState copies health and ejection state from old, the same backend in
+// the previous config, so a reload does not resurrect a backend known to be
+// down. In-flight counts are not copied: requests release the object they
+// acquired.
+func (b *Backend) InheritState(old *Backend) {
+	b.down.Store(old.down.Load())
+	b.ejectedUntil.Store(old.ejectedUntil.Load())
+	b.fails.Store(old.fails.Load())
+	b.ejections.Store(old.ejections.Load())
+}
+
 // SetHealthy records an active health-check verdict and reports whether it changed.
 func (b *Backend) SetHealthy(ok bool) (changed bool) { return b.down.Swap(!ok) == ok }
 

@@ -128,3 +128,36 @@ A third issue was caught by design review before it shipped, and its regression 
 **What went wrong.**
 - **A data race I designed in, caught on review before any test.** I first wrote tunnel tracking with a `sync.WaitGroup`, but `Add` running concurrently with `Wait` is documented misuse, and a WebSocket handshake can finish during a drain. I replaced it with a mutex-guarded set plus a 25 ms poll, the same strategy `http.Server.Shutdown` uses.
 - **A smoke test that tested the wrong binary.** A `make lint build` stopped at lint, so `bin/portcullis` was stale, and the new flags looked broken. Lesson: a failed earlier make step leaves old artefacts, so rebuild before testing. (The smoke script now prints the help line it relies on.)
+
+## Phase 3: Config and hot reload
+
+### Concepts, in plain language
+
+- **Hot reload.** Changing what the proxy does without restarting it, and without dropping connections.
+- **Immutable snapshot + atomic pointer swap.** Build a complete new routing table off to the side, then flip one pointer. A reader sees either the whole old table or the whole new one, never half of each, and readers never take a lock (`atomic.Pointer` is a single CPU instruction).
+- **Read-copy-update (RCU).** The general name for "copy, modify the copy, publish it atomically, free the old one when its last reader is done". Here Go's garbage collector does the "free when the last reader is done" part: an in-flight request holds a reference to its snapshot.
+- **Bootstrap vs dynamic config.** Some settings need a restart (which port to listen on); others can change live (where to route). Keeping them separate makes it obvious which is which.
+- **Strict parsing.** Reject unknown fields, so that a typo is an error instead of a silently ignored setting.
+- **Liveness vs readiness.** Liveness means "the process is alive; don't restart me". Readiness means "send me traffic". During shutdown we stay live but turn unready, so Kubernetes stops sending new requests while we drain.
+
+### Trade-offs and rejected alternatives
+
+- **Atomic swap vs `sync.RWMutex`.** An RWMutex read lock still writes to a shared counter, so every core fights over one cache line on every request. The atomic load is contention-free.
+- **Full rebuild vs incremental patching.** Rebuilding the whole router allocates more per reload, but the router can never be half-updated. Reloads are rare (seconds apart); requests run thousands per second.
+- **Carry backend state across reloads.** Without it, a reload would mark a just-ejected backend healthy again and send it traffic. Matching on (pool name, address) is simple and predictable.
+- **Hash on canonical JSON after defaults.** "Same meaning, same hash", so `pathType: Prefix` written out explicitly and left implicit hash the same, and the controller's retries are no-ops.
+- **Token in a file, compared in constant time.** A flag value shows up in `ps`. A plain string compare returns at the first wrong byte, which leaks timing.
+
+### Likely interview questions
+
+1. **How do you reload without dropping requests?** We compile a complete snapshot, validate it, and only then swap an `atomic.Pointer`. Each request loads the pointer once and keeps that snapshot for its whole life, retries included. `TestHotReloadUnderLoad` runs 16 clients against 100 reloads (10 deliberately invalid, half via `PUT /config`) under the race detector: 0 failed out of about 7–8.6k requests, every run.
+2. **What if someone pushes a bad config?** Parse, validate and compile all happen before the swap. Any error returns 400 with *every* problem and its field path (`pools[0].backends[0].address: "nope": want host:port`), plus the status of the config still serving. The test asserts the snapshot pointer is unchanged after each rejected push.
+3. **What happens to a request in flight during a reload that removes its backend?** It finishes normally on the old snapshot (`TestInFlightRequestFinishesOnOldSnapshot`: a 300 ms request to a backend removed mid-flight returns 200). New requests already see the new config.
+4. **How does the controller know its push landed?** The 200 response is the acknowledgement and carries `hash` and `generation`. The controller compares hashes and retries with back-off on failure. Pushing the same config again is a no-op (`changed: false`), so retries are safe.
+5. **Why does `/readyz` fail during shutdown but `/healthz` doesn't?** Failing readiness takes the pod out of Service endpoints so no new traffic arrives, while liveness stays OK so Kubernetes doesn't kill the pod mid-drain. The admin server is stopped last for exactly this reason.
+
+### What went wrong
+
+- **`go vet` caught a lock-copy bug.** The canary split counter (`atomic.Uint64`) lived inside `proxy.Route`, and the config compiler builds `[]proxy.Route` by value. Copying an atomic is a bug: two copies count separately. The counter is now a pointer allocated by `NewRouter`.
+- **A shutdown sequence that would have hung.** My first draft read three results from a channel that only ever receives two, and it stopped the admin server together with the proxy, so `/readyz` couldn't report "draining". I caught it on review before running: there is now one channel per server, and the admin server stops last.
+- **The stale-binary trap, again.** `make fmt` failed (an edited file needed formatting), so `build` never ran, and the smoke test exercised the previous binary, which doesn't know `-config`. The smoke script now aborts with the proxy's own error output if the proxy fails to start, so a stale binary can't masquerade as a bug.

@@ -24,7 +24,8 @@ import (
 // It is only recorded in logs and metrics; nothing is sent to the client.
 const statusClientClosed = 499
 
-// Options configures a Handler.
+// Options configures a Handler. Router and TrustedProxies, if set, become the
+// initial snapshot; otherwise the handler answers 503 until Swap is called.
 type Options struct {
 	Router         *Router
 	Transport      http.RoundTripper // usually NewTransport(Limits)
@@ -38,21 +39,41 @@ type Options struct {
 // on the request path.
 type Handler struct {
 	o       Options
+	snap    atomic.Pointer[Snapshot]
 	tunnels tunnelSet // upgraded connections, so Drain can wait for them
 }
 
+// Snapshot is one immutable, validated routing configuration. The handler loads
+// it once per request, so a request that started on an old snapshot finishes on
+// it even if a reload swaps in a new one meanwhile. Nothing in a published
+// Snapshot may be modified.
+type Snapshot struct {
+	Router         *Router
+	TrustedProxies []netip.Prefix
+	Version        string // set by whoever pushed it (e.g. the controller); may be empty
+	Hash           string // sha256 of the canonical config
+	Generation     uint64 // increments on every successful swap in this process
+}
+
+// Swap publishes s for new requests and returns the previous snapshot.
+func (h *Handler) Swap(s *Snapshot) *Snapshot { return h.snap.Swap(s) }
+
+// Current returns the snapshot new requests will use (nil before the first Swap).
+func (h *Handler) Current() *Snapshot { return h.snap.Load() }
+
 // New validates o and returns a Handler.
 func New(o Options) (*Handler, error) {
-	if o.Router == nil {
-		return nil, errors.New("proxy: Router is required")
-	}
 	if o.Transport == nil {
 		return nil, errors.New("proxy: Transport is required")
 	}
 	if o.Logger == nil {
 		o.Logger = slog.New(slog.DiscardHandler)
 	}
-	return &Handler{o: o}, nil
+	h := &Handler{o: o}
+	if o.Router != nil {
+		h.snap.Store(&Snapshot{Router: o.Router, TrustedProxies: o.TrustedProxies, Generation: 1})
+	}
+	return h, nil
 }
 
 // reqState is what the access log and metrics record about one request.
@@ -65,11 +86,16 @@ type reqState struct {
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
+	snap := h.snap.Load() // one load: this request sees one consistent config
+	var trustedNets []netip.Prefix
+	if snap != nil {
+		trustedNets = snap.TrustedProxies
+	}
 	peer := clientAddr(r.RemoteAddr)
-	trusted := isTrusted(peer, h.o.TrustedProxies)
+	trusted := isTrusted(peer, trustedNets)
 	// The original client: the peer itself, or behind trusted proxies the first
 	// untrusted address in X-Forwarded-For. Used for hashing and logs.
-	client := realClient(r.Header, peer, h.o.TrustedProxies).String()
+	client := realClient(r.Header, peer, trustedNets).String()
 	rid := requestID(r.Header.Get(HeaderRequestID), trusted)
 	rc := http.NewResponseController(w)
 
@@ -97,7 +123,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, rc, st.status, rid)
 		return
 	}
-	route := h.o.Router.Match(r)
+	if snap == nil {
+		st.status, st.errKind = http.StatusServiceUnavailable, "not_ready"
+		h.writeError(w, rc, st.status, rid)
+		return
+	}
+	route := snap.Router.Match(r)
 	if route == nil {
 		st.status, st.errKind = http.StatusNotFound, "no_route"
 		h.writeError(w, rc, st.status, rid)

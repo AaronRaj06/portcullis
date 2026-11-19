@@ -6,12 +6,16 @@ A small, production-minded application delivery and security stack in Go:
 - **PolicyScript**: a small, safe rule language the proxy runs on every request and response, inspired by F5 iRules.
 - **`portcullis-controller`**: a Kubernetes controller that reads Gateway API resources and programs the data plane (the *control plane*).
 
-> **Status: Phase 2 (routing, load balancing, health).** Reverse proxy with Gateway-API-style routing, five hand-written load balancers, weighted canary splits, active and passive health checks (with back-off and optional panic mode), safe retries with a budget, WebSockets, HTTP/2 and h2c upstreams, TLS, graceful shutdown, request IDs and metrics. See [docs/PLAN.md](docs/PLAN.md) and [docs/ROADMAP.md](docs/ROADMAP.md).
+> **Status: Phase 3 (config and hot reload).** Traffic config from YAML/JSON, swapped atomically via SIGHUP or the admin API with zero failed requests across 100 reloads under load.
+>
+> Earlier phases: Reverse proxy with Gateway-API-style routing, five hand-written load balancers, weighted canary splits, active and passive health checks (with back-off and optional panic mode), safe retries with a budget, WebSockets, HTTP/2 and h2c upstreams, TLS, graceful shutdown, request IDs and metrics. See [docs/PLAN.md](docs/PLAN.md) and [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ```sh
 make build
 ./bin/portcullis -upstream http://127.0.0.1:9000,http://127.0.0.1:9001 -lb p2c -listen :8080   # admin: 127.0.0.1:9901/metrics
-./bin/portcullis -help                                            # all flags and timeouts
+./bin/portcullis -config docs/examples/portcullis.yaml               # full config; `kill -HUP` to reload
+curl -X PUT --data-binary @new.yaml 127.0.0.1:9901/config           # or push it to the admin API
+./bin/portcullis -help                                              # all flags and timeouts
 ```
 
 ## Quickstart (developers)

@@ -36,7 +36,7 @@ type Route struct {
 	// exact proportions, interleaved, lock-free. A pool with no available
 	// backend is not skipped: a dead canary fails its share (no silent failover).
 	order []*lb.Pool
-	next  atomic.Uint64
+	next  *atomic.Uint64 // pointer: Route values are copied by callers, atomics must not be
 }
 
 // PickPool returns the pool for the next request on this route.
@@ -44,7 +44,7 @@ func (rt *Route) PickPool() *lb.Pool {
 	if len(rt.order) == 1 {
 		return rt.order[0]
 	}
-	return rt.order[(rt.next.Add(1)-1)%uint64(len(rt.order))]
+	return rt.order[(rt.next.Add(1)-1)%uint64(len(rt.order))] // next is set whenever len(order) > 1
 }
 
 // Router picks the most specific route, following Gateway API precedence:
@@ -109,6 +109,7 @@ func NewRouter(routes []Route) (*Router, error) {
 		if len(r.order) == 0 {
 			return nil, fmt.Errorf("route %q: all split weights are 0", r.Name)
 		}
+		r.next = new(atomic.Uint64)
 		if r.Path == "" {
 			r.Path = "/"
 		}
