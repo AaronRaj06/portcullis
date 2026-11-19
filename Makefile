@@ -9,7 +9,18 @@ FUZZTIME  ?= 10s
 STATICCHECK := honnef.co/go/tools/cmd/staticcheck@v0.8.2
 GOVULNCHECK := golang.org/x/vuln/cmd/govulncheck@v1.10.0
 
-.PHONY: help all build test lint fmt vet staticcheck golangci vuln fuzz docker clean
+# Project-local CLI tools in bin/tools: nothing global (no brew, no system Go upgrade). See docs/adr/0003.
+TOOLS_BIN := $(CURDIR)/bin/tools
+KIND      := sigs.k8s.io/kind@v0.33.0
+VEGETA    := github.com/tsenart/vegeta/v12@v12.13.0
+export PATH := $(TOOLS_BIN):$(PATH)
+
+.PHONY: help all build test lint fmt vet staticcheck golangci vuln fuzz docker tools clean
+
+tools: ## Install kind and vegeta into bin/tools (project-local)
+	GOBIN=$(TOOLS_BIN) go install $(KIND)
+	GOBIN=$(TOOLS_BIN) go install $(VEGETA)
+
 
 help: ## Show targets
 	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-12s %s\n", $$1, $$2}'
