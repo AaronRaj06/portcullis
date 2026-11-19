@@ -65,6 +65,16 @@ func NewTransport(l Limits) *http.Transport {
 	}
 }
 
+// NewH2CTransport speaks cleartext HTTP/2 ("prior knowledge", no TLS) to
+// upstreams, as gRPC-style backends often expect. Use it only as a pool's
+// Transport, since every http:// request through it is sent as HTTP/2.
+func NewH2CTransport(l Limits) *http.Transport {
+	t := NewTransport(l)
+	t.Protocols = new(http.Protocols)
+	t.Protocols.SetUnencryptedHTTP2(true)
+	return t
+}
+
 // Serve runs srv on ln until ctx is cancelled, then drains: it stops accepting
 // new connections, lets in-flight requests finish for up to drain, and
 // force-closes whatever is left.
@@ -85,6 +95,13 @@ func Serve(ctx context.Context, srv *http.Server, ln net.Listener, drain time.Du
 	sctx, cancel := context.WithTimeout(context.Background(), drain)
 	defer cancel()
 	err := srv.Shutdown(sctx)
+	// Shutdown does not see hijacked connections; let the handler drain those
+	// within the same deadline.
+	if d, ok := srv.Handler.(interface{ Drain(context.Context) error }); ok {
+		if derr := d.Drain(sctx); err == nil {
+			err = derr
+		}
+	}
 	if err != nil {
 		_ = srv.Close()
 		err = fmt.Errorf("drain incomplete after %s, closed remaining connections: %w", drain, err)

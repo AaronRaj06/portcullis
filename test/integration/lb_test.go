@@ -484,9 +484,13 @@ func TestHTTP2ToTLSUpstream(t *testing.T) {
 	be.EnableHTTP2 = true
 	be.StartTLS()
 	defer be.Close()
+	// The pool's own transport trusts the test CA (what -upstream-ca does); the
+	// proxy's default transport would reject this certificate.
 	tr := proxy.NewTransport(proxy.DefaultLimits)
-	tr.TLSClientConfig = be.Client().Transport.(*http.Transport).TLSClientConfig.Clone() // trust the test CA
-	base, _ := startProxy(t, be.URL, func(o *proxy.Options) { o.Transport = tr })
+	tr.TLSClientConfig = be.Client().Transport.(*http.Transport).TLSClientConfig.Clone()
+	pool := newPool("tls", "https", lb.NewRoundRobin, strings.TrimPrefix(be.URL, "https://"))
+	pool.Transport = tr
+	base, _ := startProxy(t, "", func(o *proxy.Options) { o.Router = mustRouter(t, proxy.Route{Name: "r", Pool: pool}) })
 	if code, body := do(t, "GET", base+"/", nil); code != 200 || body != "HTTP/2.0" {
 		t.Fatalf("upstream saw %q (status %d), want HTTP/2.0", body, code)
 	}

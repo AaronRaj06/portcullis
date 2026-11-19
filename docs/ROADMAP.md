@@ -10,19 +10,26 @@ What is deferred, and why. Anything not finished is listed here, never presented
 
 ## Deferred from Phase 1
 
-- **Upstream h2c** (HTTP/2 without TLS). HTTP/2 to TLS upstreams works; cleartext h2 would need `Transport.Protocols` and has no user yet (gRPC is not a goal).
-- **Config file and full admin API** (`/readyz`, `GET/PUT /config`, `/reload`, pprof). Flags only until Phase 3; the admin port serves only `/metrics` and `/healthz`.
-- **Per-request allocations not measured yet** (header clone, request copies, label formatting). Phase 4 measures with `-benchmem` and optimises.
-- ~~WebSockets~~ fixed in Phase 2. ~~Upstream base path~~ obsolete: backends are `host:port`; path rewriting arrives with PolicyScript's `rewrite_path`. ~~503~~ done in Phase 2.
+- **Config file and full admin API** (`/readyz`, `GET/PUT /config`, `/reload`, pprof). This *is* Phase 3. The CLI covers one catch-all route (now with weights, h2c and a private CA); multiple routes and splits are available through the Go API until the YAML config lands.
+- **Allocation optimisation.** Baseline measured now (`BenchmarkHandler`, in-memory transport): **~4.1 µs, 3.4 KB, 43 allocs per request**, including `httptest.NewRecorder`'s own. Optimising is Phase 4, which needs this "before" number.
+- **Upgrades from HTTP/2 clients** (RFC 8441 extended CONNECT). HTTP/2 connections cannot be hijacked, so a WebSocket over an HTTP/2 client connection gets 502; browsers fall back to HTTP/1.1.
 
-## Deferred from Phase 2
+### Resolved (Phases 1–2)
 
-- **Multiple routes, weights and per-route upstream TLS from the CLI.** The flags build one catch-all route with equal weights. Phase 3's YAML config exposes everything the Go API already supports.
-- **Weighted traffic splitting across pools** (one route → 90% pool A, 10% pool B), needed for Gateway API `backendRefs` canaries. Planned with the controller translation in Phase 6.
-- **Panic mode / max ejection percentage.** If every backend gets ejected, we return 503 rather than ignoring ejection the way Envoy's panic threshold does.
-- **Exponential back-off for repeatedly ejected backends.** Re-admission is a fixed `EjectFor`.
-- **Upgraded connections ignore graceful drain.** Hijacked tunnels are not tracked by `Shutdown`; they close when the process exits.
-- **Hash key `ip` uses the TCP peer,** not a trusted `X-Forwarded-For`. Behind another load balancer, use `header:` or `cookie:`.
+| Issue | Resolution |
+|---|---|
+| WebSockets stripped | Upgrade tunnelling (`upgrade.go`) |
+| No HTTP/2 to upstreams | TLS: automatic; cleartext: `h2c://` via `NewH2CTransport` |
+| Upstream base path | Obsolete: backends are `host:port`; rewriting comes with PolicyScript |
+| No 503 | 503 when no backend is available |
+| Weights not on the CLI | `-upstream http://a:80=3,...` with `-lb weighted_round_robin` |
+| No per-pool upstream TLS | `Pool.Transport`; `-upstream-ca` |
+| No canary split across pools | `Route.Split` with weights, exact and lock-free |
+| No panic mode | `Pool.Panic` / `-panic` (ADR 0006) |
+| No ejection back-off | linear `EjectFor × n`, capped, resets when clean (ADR 0006) |
+| Tunnels ignored the drain | `Handler.Drain`, called by `Serve` |
+| Hash on `ip` used the TCP peer | real client from trusted `X-Forwarded-For` |
+| CI never ran on GitHub | see README (pending a repository) |
 
 ## Explicit non-goals
 

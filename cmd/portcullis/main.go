@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"flag"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -51,11 +53,14 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	var (
 		listen      = fs.String("listen", ":8080", "proxy listen address")
 		adminListen = fs.String("admin-listen", "127.0.0.1:9901", "admin listen address (/metrics, /healthz)")
-		upstream    = fs.String("upstream", "", "comma-separated backend URLs, same scheme, e.g. http://10.0.0.1:80,http://10.0.0.2:80 (required)")
-		algo        = fs.String("lb", "round_robin", "round_robin, least_conn, p2c or hash")
+		upstream    = fs.String("upstream", "", "comma-separated backends, same scheme (http, https or h2c), optional =weight: http://10.0.0.1:80=3,http://10.0.0.2:80 (required)")
+		upstreamCA  = fs.String("upstream-ca", "", "PEM file of CAs trusted for https upstreams (default: system roots)")
+		algo        = fs.String("lb", "round_robin", "round_robin, weighted_round_robin, least_conn, p2c or hash")
 		hashKey     = fs.String("hash-key", "ip", "for -lb hash: ip, path, header:NAME or cookie:NAME")
 		ejectAfter  = fs.Int("eject-after", 5, "consecutive gateway failures before a backend is ejected (0 = off)")
-		ejectFor    = fs.Duration("eject-for", 30*time.Second, "how long an ejected backend gets no traffic")
+		ejectFor    = fs.Duration("eject-for", 30*time.Second, "base ejection time, multiplied by consecutive ejections")
+		maxEjectFor = fs.Duration("max-eject-for", 5*time.Minute, "cap on the ejection time (0 = none)")
+		panicMode   = fs.Bool("panic", false, "if no backend is available, send anyway instead of returning 503")
 		retries     = fs.Int("retries", 2, "extra attempts for idempotent requests that never reached a backend")
 		budget      = fs.Float64("retry-budget", 0.2, "retries allowed as a fraction of requests")
 		trusted     = fs.String("trusted-proxies", "", "comma-separated CIDRs whose X-Forwarded-* headers are trusted")
@@ -89,11 +94,12 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	}
 	logger := slog.New(slog.NewJSONHandler(stdout, &slog.HandlerOptions{Level: lvl}))
 
-	pool, err := buildPool(*upstream, *algo, *hashKey)
+	pool, err := buildPool(*upstream, *algo, *hashKey, *upstreamCA, l)
 	if err != nil {
 		return err
 	}
-	pool.EjectAfter, pool.EjectFor, pool.Retries = *ejectAfter, *ejectFor, *retries
+	pool.EjectAfter, pool.EjectFor, pool.MaxEjectFor = *ejectAfter, *ejectFor, *maxEjectFor
+	pool.Panic, pool.Retries = *panicMode, *retries
 	pool.Budget = lb.NewRetryBudget(*budget, 10)
 	router, err := proxy.NewRouter([]proxy.Route{{Name: "default", Pool: pool}})
 	if err != nil {
@@ -141,8 +147,12 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	if hc.Path != "" {
+		checkTransport := pool.Transport // same TLS/h2c settings as the traffic itself
+		if checkTransport == nil {
+			checkTransport = proxy.NewTransport(l)
+		}
 		checker := &http.Client{
-			Transport:     proxy.NewTransport(l),
+			Transport:     checkTransport,
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }, // a 3xx counts as healthy
 		}
 		health.Run(ctx, checker, pool, hc, nil, logger)
@@ -159,28 +169,61 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	return err
 }
 
-func buildPool(upstreams, algo, hashKey string) (*lb.Pool, error) {
+func buildPool(upstreams, algo, hashKey, caFile string, l proxy.Limits) (*lb.Pool, error) {
 	if upstreams == "" {
 		return nil, errors.New("-upstream is required")
 	}
 	pool := &lb.Pool{Name: "default"}
+	scheme := ""
 	for _, s := range strings.Split(upstreams, ",") {
-		u, err := url.Parse(strings.TrimSpace(s))
+		s = strings.TrimSpace(s)
+		weight := 1
+		if i := strings.LastIndexByte(s, '='); i >= 0 {
+			w, err := strconv.Atoi(s[i+1:])
+			if err != nil || w < 1 || w > 1000 {
+				return nil, fmt.Errorf("-upstream %q: weight must be 1..1000", s)
+			}
+			s, weight = s[:i], w
+		}
+		u, err := url.Parse(s)
 		if err != nil {
 			return nil, fmt.Errorf("-upstream: %w", err)
 		}
-		if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || (u.Path != "" && u.Path != "/") {
-			return nil, fmt.Errorf("-upstream %q: want scheme://host:port with no path", s)
+		if (u.Scheme != "http" && u.Scheme != "https" && u.Scheme != "h2c") || u.Host == "" || (u.Path != "" && u.Path != "/") {
+			return nil, fmt.Errorf("-upstream %q: want http://, https:// or h2c://host:port with no path", s)
 		}
-		if pool.Scheme != "" && pool.Scheme != u.Scheme {
+		if scheme != "" && scheme != u.Scheme {
 			return nil, errors.New("-upstream: all backends must use the same scheme")
 		}
-		pool.Scheme = u.Scheme
-		pool.Backends = append(pool.Backends, lb.NewBackend(u.Host, 1))
+		scheme = u.Scheme
+		pool.Backends = append(pool.Backends, lb.NewBackend(u.Host, weight))
+	}
+	switch {
+	case scheme == "h2c":
+		pool.Scheme, pool.Transport = "http", proxy.NewH2CTransport(l)
+	case caFile != "":
+		if scheme != "https" {
+			return nil, errors.New("-upstream-ca needs https upstreams")
+		}
+		pemData, err := os.ReadFile(caFile) //nolint:gosec // path comes from the operator's own flag
+		if err != nil {
+			return nil, fmt.Errorf("-upstream-ca: %w", err)
+		}
+		roots := x509.NewCertPool()
+		if !roots.AppendCertsFromPEM(pemData) {
+			return nil, fmt.Errorf("-upstream-ca %s: no PEM certificates found", caFile)
+		}
+		t := proxy.NewTransport(l)
+		t.TLSClientConfig = &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}
+		pool.Scheme, pool.Transport = scheme, t
+	default:
+		pool.Scheme = scheme
 	}
 	switch algo {
 	case "round_robin":
 		pool.Balancer = lb.NewRoundRobin(pool.Backends)
+	case "weighted_round_robin":
+		pool.Balancer = lb.NewWeightedRoundRobin(pool.Backends)
 	case "least_conn":
 		pool.Balancer = lb.NewLeastConnections(pool.Backends)
 	case "p2c":
@@ -192,7 +235,7 @@ func buildPool(upstreams, algo, hashKey string) (*lb.Pool, error) {
 		}
 		pool.Balancer = lb.NewConsistentHash(pool.Backends, key, lb.DefaultVnodes)
 	default:
-		return nil, fmt.Errorf("-lb %q: want round_robin, least_conn, p2c or hash", algo)
+		return nil, fmt.Errorf("-lb %q: want round_robin, weighted_round_robin, least_conn, p2c or hash", algo)
 	}
 	return pool, nil
 }

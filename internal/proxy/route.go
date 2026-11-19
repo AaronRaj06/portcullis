@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync/atomic"
 
 	"github.com/AaronRaj06/portcullis/internal/lb"
 )
@@ -13,7 +14,14 @@ import (
 // HeaderMatch requires a request header to equal Value exactly (name is case-insensitive).
 type HeaderMatch struct{ Name, Value string }
 
-// Route sends matching requests to Pool.
+// WeightedPool is one target of a traffic split.
+type WeightedPool struct {
+	Pool   *lb.Pool
+	Weight int // 0 sends no traffic (Gateway API semantics); the route needs at least one > 0
+}
+
+// Route sends matching requests to Pool, or splits them across Split by weight
+// (canary: 90 stable / 10 canary). Set exactly one of Pool and Split.
 type Route struct {
 	Name    string
 	Hosts   []string // "app.example.com" or "*.example.com"; empty matches any host
@@ -22,6 +30,21 @@ type Route struct {
 	Methods []string // empty matches any method
 	Headers []HeaderMatch
 	Pool    *lb.Pool
+	Split   []WeightedPool
+
+	// order is one smooth-weighted cycle of Split, walked with an atomic counter:
+	// exact proportions, interleaved, lock-free. A pool with no available
+	// backend is not skipped: a dead canary fails its share (no silent failover).
+	order []*lb.Pool
+	next  atomic.Uint64
+}
+
+// PickPool returns the pool for the next request on this route.
+func (rt *Route) PickPool() *lb.Pool {
+	if len(rt.order) == 1 {
+		return rt.order[0]
+	}
+	return rt.order[(rt.next.Add(1)-1)%uint64(len(rt.order))]
 }
 
 // Router picks the most specific route, following Gateway API precedence:
@@ -49,13 +72,42 @@ func NewRouter(routes []Route) (*Router, error) {
 	names := map[string]bool{}
 	seenPool := map[*lb.Pool]bool{}
 	for i := range routes {
-		r := routes[i] // copy: the router owns its routes
+		rp := &Route{ // copy: the router owns its routes
+			Name: routes[i].Name, Hosts: routes[i].Hosts, Path: routes[i].Path, Exact: routes[i].Exact,
+			Methods: routes[i].Methods, Headers: slices.Clone(routes[i].Headers),
+			Pool: routes[i].Pool, Split: routes[i].Split,
+		}
+		r := rp
 		if r.Name == "" || names[r.Name] {
 			return nil, fmt.Errorf("route %d: name %q is empty or duplicated", i, r.Name)
 		}
 		names[r.Name] = true
-		if r.Pool == nil || len(r.Pool.Backends) == 0 || r.Pool.Balancer == nil {
-			return nil, fmt.Errorf("route %q: pool with at least one backend and a balancer is required", r.Name)
+		if (r.Pool == nil) == (len(r.Split) == 0) {
+			return nil, fmt.Errorf("route %q: set exactly one of Pool and Split", r.Name)
+		}
+		split := r.Split
+		if r.Pool != nil {
+			split = []WeightedPool{{Pool: r.Pool, Weight: 1}}
+		}
+		weights := make([]int, len(split))
+		for j, wp := range split {
+			if wp.Pool == nil || len(wp.Pool.Backends) == 0 || wp.Pool.Balancer == nil {
+				return nil, fmt.Errorf("route %q: every pool needs at least one backend and a balancer", r.Name)
+			}
+			if wp.Weight < 0 {
+				return nil, fmt.Errorf("route %q: negative weight for pool %q", r.Name, wp.Pool.Name)
+			}
+			weights[j] = wp.Weight
+			if !seenPool[wp.Pool] {
+				seenPool[wp.Pool] = true
+				rt.pools = append(rt.pools, wp.Pool)
+			}
+		}
+		for _, j := range lb.SmoothOrder(weights) {
+			r.order = append(r.order, split[j].Pool)
+		}
+		if len(r.order) == 0 {
+			return nil, fmt.Errorf("route %q: all split weights are 0", r.Name)
 		}
 		if r.Path == "" {
 			r.Path = "/"
@@ -66,11 +118,6 @@ func NewRouter(routes []Route) (*Router, error) {
 		for j := range r.Headers {
 			r.Headers[j].Name = http.CanonicalHeaderKey(r.Headers[j].Name)
 		}
-		if !seenPool[r.Pool] {
-			seenPool[r.Pool] = true
-			rt.pools = append(rt.pools, r.Pool)
-		}
-		rp := &r
 		if len(r.Hosts) == 0 {
 			rt.any = append(rt.any, rp)
 		}

@@ -24,10 +24,10 @@ This file explains *how* Portcullis works; ADRs in `adr/` explain *why* a choice
 
 `internal/proxy.Handler.ServeHTTP`, in order:
 
-1. **Identify the peer.** The client IP comes from the TCP connection (`RemoteAddr`), never from a header. If that IP is inside `TrustedProxies`, we also believe its `X-Forwarded-*` and `X-Request-Id`.
+1. **Identify the peer and the real client.** The peer IP comes from the TCP connection (`RemoteAddr`). If the peer is inside `TrustedProxies`, we also believe its `X-Forwarded-*` and `X-Request-Id`, and the *real client* is found by walking `X-Forwarded-For` from the right past trusted hops; the first untrusted address wins, and entries further left are never believed because the client could forge them. Otherwise the real client is the peer. The real client is used for hashing and logs (`client` and `peer` are both logged).
 2. **Request ID.** Keep a trusted, well-formed ID (`[A-Za-z0-9._:-]{1,128}`); otherwise generate 128 random bits as hex. It is sent upstream, returned to the client, written to the access log, and included in every error body.
 3. **Early size check.** If `Content-Length` > `MaxBodyBytes`, return 413 before contacting the upstream.
-3a. **Route.** `Router.Match` picks the most specific route (see Routing below), or returns 404. The route names a pool; the pool's retry budget gets its per-request deposit.
+3a. **Route.** `Router.Match` picks the most specific route (see Routing below), or returns 404. The route chooses a pool: either its single pool, or the next one in its weighted split. The pool's retry budget gets its per-request deposit.
 4. **Build the outbound request.** Clone the headers, then:
    - remove hop-by-hop headers (the fixed list plus anything named in `Connection`), keeping `TE: trailers`;
    - set `X-Forwarded-For` (append if trusted, replace if not), `-Proto`, `-Host` and `Via`;
@@ -35,7 +35,7 @@ This file explains *how* Portcullis works; ADRs in `adr/` explain *why* a choice
    - keep the original `Host`.
 
    The request body is wrapped (`clientBody`) to apply the body limit, the per-read idle deadline, and error capture. The outbound request shares the client's context, so a client disconnect cancels the upstream call.
-5. **Pick and send.** The pool's balancer picks an available backend that hasn't been tried yet; if there is none, return 503. The request goes through our own `http.Transport` (`NewTransport`): dial timeout, response-header timeout, pooled keep-alive connections, HTTP/2 to TLS upstreams, no environment proxy, and compression left untouched. Every outcome is reported to the pool for passive ejection. If the attempt fails and ADR 0005's retry conditions hold, go back to Pick.
+5. **Pick and send.** The pool's balancer picks an available backend that hasn't been tried yet. If there is none, return 503, unless the pool is in panic mode (ADR 0006), which then picks one regardless. The pool's own `Transport` is used if set (private CA, h2c); otherwise the default. The request goes through our own `http.Transport` (`NewTransport`): dial timeout, response-header timeout, pooled keep-alive connections, HTTP/2 to TLS upstreams, no environment proxy, and compression left untouched. Every outcome is reported to the pool for passive ejection. If the attempt fails and ADR 0005's retry conditions hold, go back to Pick.
 6. **Errors before headers** map to a status and a log/metric label (`classify`):
 
    | Cause | Status | Label |
@@ -52,7 +52,7 @@ This file explains *how* Portcullis works; ADRs in `adr/` explain *why* a choice
 
    Client causes are checked first so the upstream is never blamed for them. Error bodies are JSON: `{"error": "...", "request_id": "..."}`.
 7. **Response.** Strip hop-by-hop headers, copy the rest, add `Via` and `X-Request-Id`, then stream the body through a pooled 32 KiB buffer. If the response has no `Content-Length` or is `text/event-stream`, flush after every read so events are not held in a buffer. Copy trailers at the end.
-7a. **Upgrades (WebSocket).** If the client asked to upgrade (`Connection: upgrade` + `Upgrade: X`), those two headers are re-added after hop-by-hop stripping. If the backend answers 101 with the same protocol, we hijack the client connection, write the 101, and copy bytes both ways until either side closes. A mismatched protocol gives 502. Hijacking resets connection deadlines, so idle tunnels are not cut by `WriteTimeout`. Hijacked connections are not tracked by `Shutdown`.
+7a. **Upgrades (WebSocket).** If the client asked to upgrade (`Connection: upgrade` + `Upgrade: X`), those two headers are re-added after hop-by-hop stripping. If the backend answers 101 with the same protocol, we hijack the client connection, write the 101, and copy bytes both ways until either side closes. A mismatched protocol gives 502. Hijacking resets connection deadlines, so idle tunnels are not cut by `WriteTimeout`. Tunnels are tracked by the handler, because `Shutdown` forgets hijacked connections. `proxy.Serve` calls `Handler.Drain` after `Shutdown`: it waits for tunnels until the drain deadline, then closes them.
 8. **Errors after headers.** The status line is already sent, so panic with `http.ErrAbortHandler`. The connection is cut, and the client sees a truncated response rather than one that looks complete.
 9. **Log and metrics** are recorded in a `defer`, so they run even on abort.
 
@@ -73,7 +73,11 @@ Why per-read/per-write instead of `http.Server.ReadTimeout`/`WriteTimeout`: see 
 
 ## Shutdown
 
-`proxy.Serve` waits for the context (SIGINT or SIGTERM in `main`), then calls `Server.Shutdown`. That closes the listeners, so new connections are refused, and lets in-flight requests finish. After `-drain-timeout` it force-closes the remaining connections; that cancels their request contexts, which cancels the upstream calls.
+`proxy.Serve` waits for the context (SIGINT or SIGTERM in `main`), then calls `Server.Shutdown`. That closes the listeners, so new connections are refused, and lets in-flight requests finish. It then calls `Handler.Drain` for upgraded connections, which `Shutdown` cannot see. After `-drain-timeout` it force-closes everything left; that cancels their request contexts, which cancels the upstream calls.
+
+## Upstream transports
+
+The default transport speaks HTTP/1.1, or HTTP/2 when a TLS upstream offers it. A pool can bring its own: `-upstream-ca` builds one that trusts a private CA, and `h2c://` upstreams use `NewH2CTransport` (cleartext HTTP/2, prior knowledge). Health checks reuse the pool's transport, so they test exactly what traffic uses.
 
 ## TLS
 
@@ -87,6 +91,8 @@ Why per-read/per-write instead of `http.Server.ReadTimeout`/`WriteTimeout`: see 
 `proxy.Router` follows Gateway API precedence:
 1. **Hostname:** exact (case-insensitive, port and trailing dot ignored) > longest `*.suffix` wildcard (matches one or more labels, never the apex) > routes with no hostname.
 2. **Within a hostname group,** sorted once at build time: exact path > longer prefix > has a method match > more header matches > declaration order.
+
+**Traffic splitting.** A route can name one `Pool` or a weighted `Split` across pools (canary 90/10). The split runs smooth WRR once at build time into a cycle of pools, walked with an atomic counter: exact proportions, interleaved, lock-free. Weight 0 sends nothing; an all-zero split is rejected. A pool with no available backend is *not* skipped, so a broken canary fails its share visibly instead of silently shifting traffic to stable.
 
 Prefix matching works on whole path segments (`/api` matches `/api/x`, not `/apiv1`). If nothing matches under a specific hostname, less specific groups are tried. A match costs about 60 ns with 0 allocations (`BenchmarkRouterMatch`, 15 routes).
 
@@ -109,6 +115,7 @@ All per-backend state (`in flight`, `down`, `ejectedUntil`, `fails`) is atomic, 
 ## Health
 
 - **Active** (`internal/health`): one goroutine per backend, `GET path` every interval with ±jitter and a random first delay. 2xx/3xx passes. The verdict flips only after `Unhealthy` consecutive failures or `Healthy` consecutive passes (hysteresis, so one lost packet doesn't flap a backend). Backends start healthy, so a new proxy serves at once.
+- **Back-off and panic** (ADR 0006): repeat ejections last `EjectFor × n`, capped at `MaxEjectFor`; the multiplier resets after a clean period. Optional panic mode serves from all backends when none is available.
 - **Passive** (`lb.Pool.Report`): every attempt reports. Connect errors, timeouts and 502/503/504 *responses* count as gateway failures; a 500 does not (that is an application error, not a sick host). After `EjectAfter` consecutive failures the backend is ejected for `EjectFor`, then re-admitted automatically, with no event needed: availability is `now >= ejectedUntil`.
 - A backend gets traffic only if **both** say yes. `portcullis_backend_up` is computed from live state at scrape time, so it never goes stale.
 
@@ -144,5 +151,6 @@ Rule: `proxy` is the only package on the hot path that sees the whole request; e
 | `portcullis_retries_total` | pool |
 | `portcullis_backend_ejections_total` | pool, backend |
 | `portcullis_backend_up` (computed at scrape time) | pool, backend |
+| `portcullis_panic_picks_total` | pool |
 
 Plus the Go runtime and process collectors. Label values come only from config or fixed sets. Methods outside the standard nine become `OTHER`, so a client cannot create unlimited time series. Policy denials and config generation arrive in Phases 3 and 5.

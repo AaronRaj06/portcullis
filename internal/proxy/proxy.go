@@ -37,7 +37,8 @@ type Options struct {
 // Handler is the reverse proxy. It is safe for concurrent use and holds no locks
 // on the request path.
 type Handler struct {
-	o Options
+	o       Options
+	tunnels tunnelSet // upgraded connections, so Drain can wait for them
 }
 
 // New validates o and returns a Handler.
@@ -56,15 +57,19 @@ func New(o Options) (*Handler, error) {
 
 // reqState is what the access log and metrics record about one request.
 type reqState struct {
-	route, backend, errKind string
-	status, attempts        int
-	written                 int64
+	route, pool, backend, errKind string
+	status, attempts              int
+	panicked                      bool
+	written                       int64
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
-	client := clientAddr(r.RemoteAddr)
-	trusted := isTrusted(client, h.o.TrustedProxies)
+	peer := clientAddr(r.RemoteAddr)
+	trusted := isTrusted(peer, h.o.TrustedProxies)
+	// The original client: the peer itself, or behind trusted proxies the first
+	// untrusted address in X-Forwarded-For. Used for hashing and logs.
+	client := realClient(r.Header, peer, h.o.TrustedProxies).String()
 	rid := requestID(r.Header.Get(HeaderRequestID), trusted)
 	rc := http.NewResponseController(w)
 
@@ -79,9 +84,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			h.o.Metrics.Done(st.route, r.Method, st.status, st.errKind, d)
 		}
 		h.o.Logger.LogAttrs(context.Background(), slog.LevelInfo, "request",
-			slog.String("request_id", rid), slog.String("client", client.String()),
+			slog.String("request_id", rid), slog.String("client", client), slog.String("peer", peer.String()),
 			slog.String("method", r.Method), slog.String("host", r.Host), slog.String("path", r.URL.Path),
-			slog.String("route", st.route), slog.String("backend", st.backend), slog.Int("attempts", st.attempts),
+			slog.String("route", st.route), slog.String("pool", st.pool), slog.String("backend", st.backend),
+			slog.Int("attempts", st.attempts), slog.Bool("panic", st.panicked),
 			slog.Int("status", st.status), slog.Int64("bytes", st.written), slog.Duration("duration", d),
 			slog.String("error", st.errKind))
 	}()
@@ -98,20 +104,31 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	st.route = route.Name
-	pool := route.Pool
+	pool := route.PickPool()
+	st.pool = pool.Name
 	if pool.Budget != nil {
 		pool.Budget.Deposit()
 	}
 
 	upgrade := upgradeType(r.Header)
-	tmpl, body := h.outbound(w, r, rc, client, trusted, rid, upgrade)
+	tmpl, body := h.outbound(w, r, rc, peer, trusted, rid, upgrade)
+	transport := pool.Transport
+	if transport == nil {
+		transport = h.o.Transport
+	}
 	// Only requests that may be retried pay for the write tracing.
 	retryable := pool.Retries > 0 && pool.Budget != nil && idempotent(r.Method)
 
 	var triedBuf [4]*lb.Backend
 	tried := triedBuf[:0]
 	for {
-		b, err := pool.Pick(r, tried)
+		b, panicked, err := pool.Pick(r, client, tried)
+		if panicked {
+			st.panicked = true
+			if h.o.Metrics != nil {
+				h.o.Metrics.Panic(pool.Name)
+			}
+		}
 		if err != nil {
 			if st.attempts == 0 { // otherwise keep the previous attempt's status
 				st.status, st.errKind = http.StatusServiceUnavailable, "no_backend"
@@ -124,7 +141,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		out, wrote := forBackend(tmpl, pool.Scheme, b, retryable)
 
 		b.Acquire()
-		resp, err := h.o.Transport.RoundTrip(out)
+		resp, err := transport.RoundTrip(out)
 		if err == nil {
 			defer b.Release()
 			h.report(pool, b, gatewayFailure(resp.StatusCode), metrics.StatusClass(resp.StatusCode))

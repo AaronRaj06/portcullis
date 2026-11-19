@@ -31,6 +31,7 @@ Task breakdown per phase. Each phase ends with: `go test -race ./...`, docs upda
 - [x] 503 when no backend is available, 404 when no route matches
 - [x] Distribution tests per algorithm (unit + through the proxy), ejection/re-admission, active health, no-retry tests
 - [x] Phase 1 fixes: WebSocket/Upgrade tunnelling, HTTP/2 to TLS upstreams
+- [x] Follow-ups: weighted split across pools, panic mode, ejection back-off, tunnel drain, per-pool transport (CA, h2c), real-client hashing, CLI weights, handler allocation baseline
 
 ## Phase 3: Config and hot reload
 - [ ] YAML schema, defaults, validation with field paths in errors

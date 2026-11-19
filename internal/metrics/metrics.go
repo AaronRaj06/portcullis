@@ -21,6 +21,7 @@ type Metrics struct {
 	attempts  *prometheus.CounterVec
 	retries   *prometheus.CounterVec
 	ejections *prometheus.CounterVec
+	panics    *prometheus.CounterVec
 	inFlight  prometheus.Gauge
 }
 
@@ -46,11 +47,14 @@ func New(reg prometheus.Registerer) *Metrics {
 		ejections: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "portcullis_backend_ejections_total", Help: "Passive ejections after consecutive gateway failures.",
 		}, []string{"pool", "backend"}),
+		panics: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "portcullis_panic_picks_total", Help: "Picks made in panic mode because no backend was available.",
+		}, []string{"pool"}),
 		inFlight: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "portcullis_requests_in_flight", Help: "Requests currently being served.",
 		}),
 	}
-	reg.MustRegister(m.requests, m.duration, m.errors, m.attempts, m.retries, m.ejections, m.inFlight)
+	reg.MustRegister(m.requests, m.duration, m.errors, m.attempts, m.retries, m.ejections, m.panics, m.inFlight)
 	return m
 }
 
@@ -80,6 +84,9 @@ func (m *Metrics) Retry(pool string) { m.retries.WithLabelValues(pool).Inc() }
 
 // Ejected records a passive ejection.
 func (m *Metrics) Ejected(pool, backend string) { m.ejections.WithLabelValues(pool, backend).Inc() }
+
+// Panic records a panic-mode pick.
+func (m *Metrics) Panic(pool string) { m.panics.WithLabelValues(pool).Inc() }
 
 // StatusClass maps 200 → "2xx" without allocating.
 func StatusClass(code int) string {

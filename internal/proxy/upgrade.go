@@ -1,10 +1,73 @@
 package proxy
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 )
+
+// tunnelSet tracks upgraded connections. http.Server.Shutdown forgets a
+// connection once it is hijacked, so without this a drain would not wait for
+// WebSockets and would leave them open. It is only touched on the upgrade
+// path, so its mutex is never on the normal request path.
+type tunnelSet struct {
+	mu    sync.Mutex
+	conns map[io.Closer]struct{}
+}
+
+func (t *tunnelSet) add(cs ...io.Closer) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.conns == nil {
+		t.conns = map[io.Closer]struct{}{}
+	}
+	for _, c := range cs {
+		t.conns[c] = struct{}{}
+	}
+}
+
+func (t *tunnelSet) remove(cs ...io.Closer) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, c := range cs {
+		delete(t.conns, c)
+	}
+}
+
+func (t *tunnelSet) len() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return len(t.conns)
+}
+
+func (t *tunnelSet) closeAll() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for c := range t.conns {
+		_ = c.Close()
+	}
+}
+
+// Drain waits for upgraded connections (WebSockets) to finish until ctx is done,
+// then closes the rest. proxy.Serve calls it after http.Server.Shutdown. It polls,
+// like Shutdown does, because a tunnel may still open mid-drain (a handshake
+// already in flight), which rules out a WaitGroup.
+func (h *Handler) Drain(ctx context.Context) error {
+	tick := time.NewTicker(25 * time.Millisecond)
+	defer tick.Stop()
+	for h.tunnels.len() > 0 {
+		select {
+		case <-ctx.Done():
+			h.tunnels.closeAll()
+			return ctx.Err()
+		case <-tick.C:
+		}
+	}
+	return nil
+}
 
 // upgradeType returns the protocol a request or response asks to switch to
 // ("websocket"), or "" if it is not an upgrade.
@@ -19,8 +82,7 @@ func upgradeType(h http.Header) string {
 // WebSocket handshake. It takes over (hijacks) the client connection and copies
 // bytes in both directions until either side closes.
 //
-// Hijacked connections are not tracked by http.Server.Shutdown, so they do
-// not hold up a drain. They are closed when the process exits.
+// Tunnels are tracked so a graceful shutdown waits for them (Handler.Drain).
 func (h *Handler) serveUpgrade(w http.ResponseWriter, rc *http.ResponseController, r *http.Request,
 	resp *http.Response, reqType, rid string) (int, string) {
 	respType := upgradeType(resp.Header)
@@ -43,6 +105,8 @@ func (h *Handler) serveUpgrade(w http.ResponseWriter, rc *http.ResponseControlle
 		return http.StatusBadGateway, "upgrade_hijack"
 	}
 	defer conn.Close()
+	h.tunnels.add(conn, backConn)
+	defer h.tunnels.remove(conn, backConn)
 	// No need to clear our per-write deadline: Hijack already resets the
 	// connection's deadlines (net/http server.go hijackLocked), so a tunnel can
 	// idle indefinitely. TestUpgradeTunnel idles past WriteTimeout to prove it.

@@ -111,3 +111,20 @@ A third issue was caught by design review before it shipped, and its regression 
   3. Consistent hashing was 16% off fair. That one was *not* a bug: I measured arc shares directly, found ring variance at 160 vnodes, and raised the default instead of loosening the test.
 - **A test that couldn't fail.** The Phase 2 integration tests all passed on the first run, so I mutation-tested the guards: delete each retry condition and check its test fails. Five did. The sixth, clearing the write deadline on hijacked WebSocket connections, survived. Reading `net/http/server.go` showed `hijackLocked` already calls `SetDeadline(time.Time{})`, so the line was dead code. I deleted it and kept the test, which still proves idle tunnels survive `WriteTimeout`.
 - **Allocation hiding in plain sight.** `net.SplitHostPort` allocates an error for every `Host` header without a port (the common case). A byte scan took routing from 1 allocation to 0.
+
+### Phase 2 follow-ups: closing the gaps
+
+**Concepts.**
+- **Real client IP behind proxies:** read `X-Forwarded-For` right to left and stop at the first address you don't trust. Everything to its left was written by the client and could be fake.
+- **Panic mode:** when *every* backend looks dead, the health checks are probably wrong, so serve anyway. It's off by default here, because a 503 is the honest answer.
+- **Ejection back-off:** a backend that keeps failing is kept out longer each time (linear, capped).
+- **h2c:** HTTP/2 without TLS, sent with "prior knowledge" because there is no TLS handshake to negotiate it.
+
+**Likely questions.**
+1. *Why read XFF from the right?* Each trusted proxy appends the address it saw, so the rightmost entries are written by infrastructure we control. The client controls the left end. `TestRealClient` includes a forged `6.6.6.6` on the left that must be ignored.
+2. *Why doesn't a weighted split fail over when the canary is down?* Silent failover hides a broken canary from the very rollout that is supposed to detect it. The canary's 10% fails visibly, and alerts and rollback work as intended.
+3. *How do WebSockets interact with graceful shutdown?* `http.Server.Shutdown` stops tracking a connection once it's hijacked. We track tunnels ourselves, and `Serve` calls `Handler.Drain`, which waits until the drain deadline and then closes them. Two tests cover the early-finish and forced-close cases.
+
+**What went wrong.**
+- **A data race I designed in, caught on review before any test.** I first wrote tunnel tracking with a `sync.WaitGroup`, but `Add` running concurrently with `Wait` is documented misuse, and a WebSocket handshake can finish during a drain. I replaced it with a mutex-guarded set plus a 25 ms poll, the same strategy `http.Server.Shutdown` uses.
+- **A smoke test that tested the wrong binary.** A `make lint build` stopped at lint, so `bin/portcullis` was stale, and the new flags looked broken. Lesson: a failed earlier make step leaves old artefacts, so rebuild before testing. (The smoke script now prints the help line it relies on.)

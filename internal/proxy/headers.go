@@ -76,6 +76,34 @@ func isTrusted(a netip.Addr, trusted []netip.Prefix) bool {
 	return false
 }
 
+// realClient finds the original client. If the TCP peer is a trusted proxy,
+// walk X-Forwarded-For from the right (the end our own proxies appended),
+// skipping trusted hops. The first untrusted address is the client. Entries
+// further left could be forged by that client, so they are never believed. If
+// every hop is trusted, the leftmost is used. An unparseable entry stops the
+// walk at the last address we could trust.
+func realClient(h http.Header, peer netip.Addr, trusted []netip.Prefix) netip.Addr {
+	if !isTrusted(peer, trusted) {
+		return peer
+	}
+	client := peer
+	vals := h["X-Forwarded-For"]
+	for i := len(vals) - 1; i >= 0; i-- {
+		hops := strings.Split(vals[i], ",")
+		for j := len(hops) - 1; j >= 0; j-- {
+			a, err := netip.ParseAddr(textproto.TrimString(hops[j]))
+			if err != nil {
+				return client
+			}
+			client = a.Unmap()
+			if !isTrusted(client, trusted) {
+				return client
+			}
+		}
+	}
+	return client
+}
+
 // setForwarded writes X-Forwarded-*, Via and the request ID on the outbound headers.
 // Headers the client sent are kept only if the client is a trusted proxy;
 // otherwise a client could spoof its IP to the backend.

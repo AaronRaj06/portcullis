@@ -77,3 +77,30 @@ func TestRequestID(t *testing.T) {
 		}
 	}
 }
+
+func TestRealClient(t *testing.T) {
+	trusted := []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}
+	lbPeer := netip.MustParseAddr("10.0.0.5")
+	for _, tc := range []struct {
+		name string
+		peer netip.Addr
+		xff  []string
+		want string
+	}{
+		{"untrusted peer ignores XFF", netip.MustParseAddr("203.0.113.9"), []string{"1.1.1.1"}, "203.0.113.9"},
+		{"trusted peer, one hop", lbPeer, []string{"198.51.100.7"}, "198.51.100.7"},
+		{"forged left entries are skipped", lbPeer, []string{"6.6.6.6, 198.51.100.7"}, "198.51.100.7"},
+		{"trusted hops are walked past", lbPeer, []string{"198.51.100.7, 10.1.1.1", "10.2.2.2"}, "198.51.100.7"},
+		{"all trusted gives leftmost", lbPeer, []string{"10.9.9.9, 10.1.1.1"}, "10.9.9.9"},
+		{"garbage stops the walk", lbPeer, []string{"198.51.100.7, not-an-ip"}, "10.0.0.5"},
+		{"no XFF from trusted peer", lbPeer, nil, "10.0.0.5"},
+	} {
+		h := http.Header{}
+		for _, v := range tc.xff {
+			h.Add("X-Forwarded-For", v)
+		}
+		if got := realClient(h, tc.peer, trusted).String(); got != tc.want {
+			t.Errorf("%s: got %s, want %s", tc.name, got, tc.want)
+		}
+	}
+}
