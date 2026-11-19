@@ -1,4 +1,7 @@
-// Package proxy is the L7 forwarding core: a hand-written reverse proxy built on net/http and http.Transport.
+// Package proxy is the L7 forwarding core: a hand-written reverse proxy built on
+// net/http and http.Transport (httputil.ReverseProxy is used only as a benchmark baseline).
 //
-// Phase 0 placeholder: no code yet. See docs/PLAN.md for when it lands.
+// It strips hop-by-hop headers, sets X-Forwarded-* and Via (trusting client-sent
+// values only from configured proxies), streams bodies in both directions,
+// propagates client cancellation upstream, and maps failures to 502/503/504 with a request ID.
 package proxy

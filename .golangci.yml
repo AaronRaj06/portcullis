@@ -8,6 +8,13 @@ linters:
     - misspell
     - revive
     - unconvert
+  settings:
+    gosec:
+      excludes:
+        - G104 # unchecked errors: already covered by errcheck (with the preset below)
+  exclusions:
+    # Ignore unchecked Close/Flush/Print-style errors, the usual Go convention.
+    presets: [std-error-handling]
 formatters:
   enable:
     - gofmt

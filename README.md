@@ -6,11 +6,17 @@ A small, production-minded application delivery and security stack in Go:
 - **PolicyScript**: a small, safe rule language the proxy runs on every request and response, inspired by F5 iRules.
 - **`portcullis-controller`**: a Kubernetes controller that reads Gateway API resources and programs the data plane (the *control plane*).
 
-> **Status: Phase 0 (scaffold).** Nothing serves traffic yet. See [docs/PLAN.md](docs/PLAN.md) and [docs/ROADMAP.md](docs/ROADMAP.md).
+> **Status: Phase 1 (core proxy).** Single-upstream reverse proxy with streaming, correct proxy headers, timeouts, TLS, graceful shutdown, request IDs and metrics. See [docs/PLAN.md](docs/PLAN.md) and [docs/ROADMAP.md](docs/ROADMAP.md).
+
+```sh
+make build
+./bin/portcullis -upstream http://127.0.0.1:9000 -listen :8080   # admin: 127.0.0.1:9901/metrics
+./bin/portcullis -help                                            # all flags and timeouts
+```
 
 ## Quickstart (developers)
 
-Requires Go 1.23+, GNU make and Docker.
+Requires Go 1.26+, GNU make and Docker. Nothing else is installed globally: `make tools` builds kind and vegeta into `bin/tools/`.
 
 ```sh
 make help      # list targets
@@ -18,6 +24,7 @@ make all       # lint + test (-race) + build into bin/
 make vuln      # govulncheck
 make fuzz      # short fuzz smoke run (FUZZTIME=10s)
 make docker    # distroless, non-root images
+make tools     # project-local kind + vegeta
 ```
 
 ## Layout

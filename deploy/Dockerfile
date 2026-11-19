@@ -1,5 +1,5 @@
 # Builds one binary (BIN) into a distroless, non-root image.
-FROM golang:1.23 AS build
+FROM golang:1.26 AS build
 ARG BIN=portcullis
 ARG VERSION=dev
 WORKDIR /src

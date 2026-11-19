@@ -1,18 +1,31 @@
 package main
 
 import (
-	"os/exec"
+	"bytes"
+	"context"
 	"strings"
 	"testing"
 )
 
-// Smoke test: the binary builds and -version works.
-func TestVersionFlag(t *testing.T) {
-	out, err := exec.Command("go", "run", ".", "-version").CombinedOutput()
-	if err != nil {
-		t.Fatalf("go run -version: %v\n%s", err, out)
+func TestRunVersion(t *testing.T) {
+	var out bytes.Buffer
+	if err := run(context.Background(), []string{"-version"}, &out); err != nil {
+		t.Fatal(err)
 	}
-	if !strings.HasPrefix(string(out), "portcullis ") {
-		t.Fatalf("unexpected output %q", out)
+	if !strings.HasPrefix(out.String(), "portcullis ") {
+		t.Fatalf("unexpected output %q", out.String())
+	}
+}
+
+func TestRunRejectsBadInput(t *testing.T) {
+	for _, args := range [][]string{
+		{},                       // no upstream
+		{"-upstream", "ftp://x"}, // bad scheme
+		{"-upstream", "http://x", "-trusted-proxies", "nope"}, // bad CIDR
+		{"-upstream", "http://x", "-tls-cert", "/missing"},    // unreadable cert
+	} {
+		if err := run(context.Background(), args, &bytes.Buffer{}); err == nil {
+			t.Errorf("run(%q) = nil, want error", args)
+		}
 	}
 }

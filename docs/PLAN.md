@@ -9,17 +9,18 @@ Task breakdown per phase. Each phase ends with: `go test -race ./...`, docs upda
 - [x] Distroless non-root Dockerfile
 - [x] docs skeleton, ADRs 0001–0002, interview notes
 
-## Phase 1: Core proxy
-- [ ] `proxy.Handler`: build outbound request, `http.Transport` round trip, copy response
-- [ ] Hop-by-hop header stripping (RFC 9110 §7.6.1, plus headers named in `Connection`)
-- [ ] `X-Forwarded-For/Proto/Host`, `Via`; trusted-proxy CIDR list
-- [ ] Streaming copy with flush for SSE / `Transfer-Encoding: chunked`; pooled copy buffers
-- [ ] Cancellation via request context; max body size via `http.MaxBytesReader`
-- [ ] Error mapping: dial fail → 502, no healthy backend → 503, timeout → 504; JSON body with request ID
-- [ ] Server timeouts (read-header, idle, write), dial and response-header timeouts, max header bytes
-- [ ] Request ID middleware; `slog` JSON access log; basic Prometheus metrics
-- [ ] Graceful shutdown with drain timeout
-- [ ] Integration tests: headers, streaming, client cancel, 502, 504, drain, slowloris
+## Phase 1: Core proxy ✅
+- [x] `proxy.Handler`: build outbound request, `http.Transport` round trip, copy response
+- [x] Hop-by-hop header stripping (RFC 9110 §7.6.1, plus headers named in `Connection`; keep `TE: trailers`)
+- [x] `X-Forwarded-For/Proto/Host`, `Via`; trusted-proxy CIDR list; strip `Forwarded` from untrusted clients
+- [x] Streaming copy with flush for SSE / unknown length; pooled copy buffers
+- [x] Cancellation via request context; max body size via `http.MaxBytesReader`
+- [x] Error mapping: 400/408/413 (client), 502/504 (upstream), JSON body with request ID. 503 needs pools → Phase 2
+- [x] Timeouts: read-header, idle, per-write, per-body-read, dial, response-header; max header bytes (ADR 0004)
+- [x] Request ID (trusted IDs kept); `slog` JSON access log; basic Prometheus metrics on the admin port
+- [x] Graceful shutdown with drain timeout
+- [x] TLS termination (TLS 1.2+, AEAD suites, PQ hybrid verified)
+- [x] Integration tests: headers, streaming both ways, client cancel, 502, 504, 413, 408, drain, slowloris
 
 ## Phase 2: Routing, load balancing, health
 - [ ] Route matcher: host, exact/prefix path, method, header; specificity ordering
