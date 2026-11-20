@@ -123,6 +123,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, rc, st.status, rid)
 		return
 	}
+	extended := isExtendedConnect(r) // WebSocket over HTTP/2 (RFC 8441)
+	if r.Method == http.MethodConnect && !extended {
+		// Plain CONNECT asks for a raw TCP tunnel, which a reverse proxy does not
+		// offer. Checked before routing: a CONNECT has no path to route on.
+		st.status, st.errKind = http.StatusMethodNotAllowed, "connect_not_allowed"
+		h.writeError(w, rc, st.status, rid)
+		return
+	}
 	if snap == nil {
 		st.status, st.errKind = http.StatusServiceUnavailable, "not_ready"
 		h.writeError(w, rc, st.status, rid)
@@ -142,7 +150,15 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	upgrade := upgradeType(r.Header)
+	if extended {
+		upgrade = "websocket"
+	}
 	tmpl, body := h.outbound(w, r, rc, peer, trusted, rid, upgrade)
+	var wsKey string
+	if extended {
+		wsKey = toHTTP1WebSocket(tmpl)
+		body = nil // the client's stream body is the tunnel, read after the handshake
+	}
 	transport := pool.Transport
 	if transport == nil {
 		transport = h.o.Transport
@@ -177,7 +193,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			defer b.Release()
 			h.report(pool, b, gatewayFailure(resp.StatusCode), metrics.StatusClass(resp.StatusCode))
 			if resp.StatusCode == http.StatusSwitchingProtocols {
-				st.status, st.errKind = h.serveUpgrade(w, rc, r, resp, upgrade, rid)
+				if extended {
+					st.status, st.errKind = h.serveExtendedConnect(w, rc, r, resp, wsKey, rid)
+				} else {
+					st.status, st.errKind = h.serveUpgrade(w, rc, r, resp, upgrade, rid)
+				}
 				return
 			}
 			h.serveResponse(w, rc, r, resp, rid, &st)

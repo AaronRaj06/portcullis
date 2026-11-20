@@ -40,6 +40,9 @@ This file explains *how* Portcullis works; ADRs in `adr/` explain *why* a choice
 - **Traffic (file or API, live):** `trustedProxies`, `pools` (scheme, lb, hashKey, backends, healthCheck, ejection, retries, panic, tls), `routes` (hosts, path, pathType, methods, headers, backends with weights). Example: `docs/examples/portcullis.yaml`.
 - `-upstream` and friends are shorthand: they build a one-route config and go through the same `Manager.ApplyConfig` path.
 - **Admin API** (`internal/admin`): `/healthz` (liveness), `/readyz` (a config is serving and we are not draining), `/metrics`, `GET/PUT /config`, `POST /reload`, optional `/debug/pprof/`. On SIGTERM `/readyz` turns 503 first, the proxy drains, and the admin server stops last.
+- **Concurrency control:** `ETag: "<hash>"` on `GET`/`PUT /config`; `PUT` with `If-Match` is applied only over that config (412 otherwise), with the check and the swap under one lock.
+- **Unchanged pool transports are reused** (keyed by scheme, SNI, CA path and CA contents), so reloads don't drop upstream connections. The config hash covers CA file contents.
+- **Certificate rotation:** SIGHUP also re-reads `-tls-cert/-tls-key` into `CertReloader`; handshakes read the current certificate through an atomic pointer.
 - **Metrics:** `portcullis_config_generation`, `portcullis_config_reloads_total{result=success|unchanged|error}`, `portcullis_config_last_success_timestamp_seconds`.
 
 ## Request lifecycle
@@ -75,6 +78,7 @@ This file explains *how* Portcullis works; ADRs in `adr/` explain *why* a choice
    Client causes are checked first so the upstream is never blamed for them. Error bodies are JSON: `{"error": "...", "request_id": "..."}`.
 7. **Response.** Strip hop-by-hop headers, copy the rest, add `Via` and `X-Request-Id`, then stream the body through a pooled 32 KiB buffer. If the response has no `Content-Length` or is `text/event-stream`, flush after every read so events are not held in a buffer. Copy trailers at the end.
 7a. **Upgrades (WebSocket).** If the client asked to upgrade (`Connection: upgrade` + `Upgrade: X`), those two headers are re-added after hop-by-hop stripping. If the backend answers 101 with the same protocol, we hijack the client connection, write the 101, and copy bytes both ways until either side closes. A mismatched protocol gives 502. Hijacking resets connection deadlines, so idle tunnels are not cut by `WriteTimeout`. Tunnels are tracked by the handler, because `Shutdown` forgets hijacked connections. `proxy.Serve` calls `Handler.Drain` after `Shutdown`: it waits for tunnels until the drain deadline, then closes them.
+7b. **WebSockets over HTTP/2 (RFC 8441, ADR 0008).** An extended CONNECT (`:protocol websocket`) is rewritten into an HTTP/1.1 `GET` upgrade with a generated `Sec-WebSocket-Key`. The backend's `Sec-WebSocket-Accept` is verified, the client gets `200`, and the HTTP/2 stream becomes the tunnel. This needs `GODEBUG=http2xconnect=1`. Plain CONNECT gets 405.
 8. **Errors after headers.** The status line is already sent, so panic with `http.ErrAbortHandler`. The connection is cut, and the client sees a truncated response rather than one that looks complete.
 9. **Log and metrics** are recorded in a `defer`, so they run even on abort.
 

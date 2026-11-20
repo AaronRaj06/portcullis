@@ -27,3 +27,10 @@ The controller (Phase 6) and operators must be able to change routing at any tim
 - Measured: 100 reloads (90 valid, 10 deliberately invalid, alternating file and API) under 16 concurrent clients: **0 failed of 7,148 requests** under `-race`; five repeats: 0 of 40,634.
 - A reload rebuilds pool-specific transports (h2c, private CA), so those pools open new upstream connections afterwards. Default-transport pools keep their connections.
 - `GET /config?full=1` shows the config with defaults applied, which helps when debugging what is actually serving.
+
+## Update (follow-ups)
+
+- **Optimistic concurrency:** `GET /config` and successful `PUT`s return `ETag: "<hash>"`. A `PUT` with `If-Match` applies only over that config (`*` = any applied config); otherwise 412 with the serving status. The check and the swap happen under the Manager's lock. Counted as `portcullis_config_reloads_total{result="conflict"}`.
+- **The hash covers referenced files:** the contents of every `tls.caFile` go into the hash, read once per compile, so the hash and the transport see the same bytes.
+- **Transports are reused** when scheme, SNI name, CA path and CA contents are unchanged, so those pools keep their upstream connections across reloads.
+- **TLS certificate rotation:** `-tls-cert/-tls-key` are served through `CertReloader` (an atomic pointer read in `GetCertificate`) and re-read on SIGHUP. A bad file keeps the old certificate.

@@ -161,3 +161,20 @@ A third issue was caught by design review before it shipped, and its regression 
 - **`go vet` caught a lock-copy bug.** The canary split counter (`atomic.Uint64`) lived inside `proxy.Route`, and the config compiler builds `[]proxy.Route` by value. Copying an atomic is a bug: two copies count separately. The counter is now a pointer allocated by `NewRouter`.
 - **A shutdown sequence that would have hung.** My first draft read three results from a channel that only ever receives two, and it stopped the admin server together with the proxy, so `/readyz` couldn't report "draining". I caught it on review before running: there is now one channel per server, and the admin server stops last.
 - **The stale-binary trap, again.** `make fmt` failed (an edited file needed formatting), so `build` never ran, and the smoke test exercised the previous binary, which doesn't know `-config`. The smoke script now aborts with the proxy's own error output if the proxy fails to start, so a stale binary can't masquerade as a bug.
+
+### Phase 3 follow-ups: closing the gaps
+
+**Concepts.**
+- **Optimistic concurrency (ETag / If-Match):** "apply this only if the config is still the one I last read". A writer working from stale data gets `412 Precondition Failed` instead of silently overwriting a newer config. This is HTTP's standard lost-update protection.
+- **Certificate rotation:** swap in a renewed certificate without restarting. New handshakes get the new one; existing connections keep theirs.
+- **RFC 8441:** WebSockets over HTTP/2. There is no connection to take over (hijack), so the WebSocket rides inside one HTTP/2 stream opened with `CONNECT` + `:protocol`.
+
+**Likely questions.**
+1. *Two controllers push at once. What happens?* Each sends `If-Match` with the hash it read. The Manager checks and swaps under one mutex, so exactly one wins and the other gets 412 together with the serving status, so it can re-read and retry. `TestIfMatchRejectsStalePushes` plays out this race.
+2. *How do you rotate a TLS certificate with zero downtime?* `tls.Config.GetCertificate` reads an `atomic.Pointer[tls.Certificate]`. SIGHUP loads the new files and stores the pointer only if they parse. `TestCertificateRotation` shows serial 1 → 2, then a broken key leaves 2 serving; the real binary did the same with openssl-made certificates.
+3. *How does the proxy verify a backend's WebSocket handshake when the client never sent a key?* HTTP/2 clients send no `Sec-WebSocket-Key`, so the proxy generates one and checks `Sec-WebSocket-Accept = base64(SHA-1(key + RFC GUID))`. A backend that answers anything else gets 502 (tested with a deliberately forged accept).
+
+**What went wrong.**
+- **Go's HTTP/2 client can't send RFC 8441 requests.** `net/http` rejects `:protocol` as a header name, and recent `x/net/http2` Transports turned out to route back through `net/http`, so switching packages failed with the identical error. Reading the source (`transport.go:628`) explained it. The test now speaks raw HTTP/2 frames with `x/net`'s `Framer` and `hpack`, the same exchange a browser performs.
+- **Routing ran before the method check.** A plain `CONNECT` has no path, so it got a 404 from the router instead of a 405. The method guard now runs first.
+- **Dead code, found by mutation testing again.** Clearing the write deadline on HTTP/2 tunnels did nothing, because no deadline is ever set on that path. I deleted it; the idle-tunnel test keeps guarding the behaviour.

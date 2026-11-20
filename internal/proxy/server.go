@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"sync/atomic"
 	"time"
 )
 
@@ -112,17 +113,55 @@ func Serve(ctx context.Context, srv *http.Server, ln net.Listener, drain time.Du
 	return err
 }
 
-// TLSConfig is the one place TLS policy lives. CurvePreferences is left nil on
+// CertReloader serves a certificate that can be replaced while running (for
+// example after cert-manager or certbot renews it). Each handshake reads the
+// current one through an atomic pointer, so rotation needs no lock and
+// established connections are unaffected.
+type CertReloader struct {
+	certFile, keyFile string
+	cert              atomic.Pointer[tls.Certificate]
+}
+
+// NewCertReloader loads certFile and keyFile.
+func NewCertReloader(certFile, keyFile string) (*CertReloader, error) {
+	r := &CertReloader{certFile: certFile, keyFile: keyFile}
+	if err := r.Reload(); err != nil {
+		return nil, err
+	}
+	return r, nil
+}
+
+// Reload re-reads the files. On error the current certificate keeps serving.
+func (r *CertReloader) Reload() error {
+	cert, err := tls.LoadX509KeyPair(r.certFile, r.keyFile)
+	if err != nil {
+		return fmt.Errorf("tls: %w", err)
+	}
+	r.cert.Store(&cert)
+	return nil
+}
+
+// GetCertificate is the tls.Config hook.
+func (r *CertReloader) GetCertificate(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+	return r.cert.Load(), nil
+}
+
+// TLSConfig loads a certificate and returns the server TLS config.
+func TLSConfig(certFile, keyFile string) (*tls.Config, error) {
+	r, err := NewCertReloader(certFile, keyFile)
+	if err != nil {
+		return nil, err
+	}
+	return TLSConfigFrom(r), nil
+}
+
+// TLSConfigFrom is the one place TLS policy lives. CurvePreferences is left nil on
 // purpose: Go's default list prefers the post-quantum hybrid X25519MLKEM768
 // (Go 1.24+), so clients that support it already get it.
-func TLSConfig(certFile, keyFile string) (*tls.Config, error) {
-	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
-	if err != nil {
-		return nil, fmt.Errorf("tls: %w", err)
-	}
+func TLSConfigFrom(r *CertReloader) *tls.Config {
 	return &tls.Config{
-		MinVersion:   tls.VersionTLS12,
-		Certificates: []tls.Certificate{cert},
+		MinVersion:     tls.VersionTLS12,
+		GetCertificate: r.GetCertificate,
 		// TLS 1.2 only (1.3 suites are fixed by Go): forward-secret AEAD suites.
 		CipherSuites: []uint16{
 			tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
@@ -132,5 +171,5 @@ func TLSConfig(certFile, keyFile string) (*tls.Config, error) {
 			tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256,
 			tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
 		},
-	}, nil
+	}
 }

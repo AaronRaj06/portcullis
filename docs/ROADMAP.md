@@ -11,7 +11,6 @@ What is deferred, and why. Anything not finished is listed here, never presented
 ## Deferred from Phase 1
 
 - **Allocation optimisation.** Baseline measured now (`BenchmarkHandler`, in-memory transport): **~4.1 µs, 3.4 KB, 43 allocs per request**, including `httptest.NewRecorder`'s own. Optimising is Phase 4, which needs this "before" number.
-- **Upgrades from HTTP/2 clients** (RFC 8441 extended CONNECT). HTTP/2 connections cannot be hijacked, so a WebSocket over an HTTP/2 client connection gets 502; browsers fall back to HTTP/1.1.
 
 ### Resolved (Phases 1–2)
 
@@ -29,14 +28,17 @@ What is deferred, and why. Anything not finished is listed here, never presented
 | Tunnels ignored the drain | `Handler.Drain`, called by `Serve` |
 | Hash on `ip` used the TCP peer | real client from trusted `X-Forwarded-For` |
 | Config file / admin API | Phase 3 (ADR 0007) |
+| TLS certificate needed a restart | `CertReloader`, re-read on SIGHUP |
+| No ordering for config pushes | `ETag` + `If-Match` → 412 on stale pushes |
+| CA file contents not in the hash | hash covers referenced files |
+| Pool transports rebuilt every reload | reused when their settings are unchanged |
+| WebSockets from HTTP/2 clients got 502 | RFC 8441 translation (ADR 0008) |
 | CI never ran on GitHub | private repo created; push blocked until the `gh` token has the `workflow` scope |
 
-## Deferred from Phase 3
+## By design (not planned)
 
-- **Hot-reloading process-level settings** (listeners, TLS certificate, timeouts). Restart needed (ADR 0007). Certificate rotation without restart (`GetCertificate` reloading files) is a natural next step.
-- **Ordering of pushes.** `version` is opaque, so the data plane cannot tell that an old snapshot arrived after a newer one. The controller pushes sequentially and retries only its latest snapshot; a monotonic `generation` precondition (`If-Match`) would make this explicit.
-- **Pool transports are rebuilt on every reload** (h2c / private-CA pools only), costing new upstream handshakes. Reusing a transport when its TLS settings are unchanged is an easy optimisation.
-- **The hash covers the config text, not referenced files.** Changing the contents of a `caFile` without changing the config is treated as "unchanged".
+- **Listeners and server timeouts need a restart** (ADR 0007). Changing a listen address means rebinding a socket; the server-level timeouts are fixed when `http.Server` is built. Everything that changes routing is live, and so is the TLS certificate.
+- **WebSockets over HTTP/2 need `GODEBUG=http2xconnect=1`** (ADR 0008), Go's own switch for RFC 8441. Without it, clients use HTTP/1.1 WebSockets, which always work.
 
 ## Explicit non-goals
 

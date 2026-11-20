@@ -16,6 +16,7 @@ make build
 ./bin/portcullis -config docs/examples/portcullis.yaml               # full config; `kill -HUP` to reload
 curl -X PUT --data-binary @new.yaml 127.0.0.1:9901/config           # or push it to the admin API
 ./bin/portcullis -help                                              # all flags and timeouts
+GODEBUG=http2xconnect=1 ./bin/portcullis ...                        # optional: WebSockets over HTTP/2 (RFC 8441)
 ```
 
 ## Quickstart (developers)

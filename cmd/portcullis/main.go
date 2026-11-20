@@ -52,7 +52,8 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	fs := flag.NewFlagSet("portcullis", flag.ContinueOnError)
 	l := proxy.DefaultLimits
 	var (
-		configFile  = fs.String("config", "", "traffic config file (YAML or JSON); reloaded on SIGHUP")
+		configFile = fs.String("config", "", "traffic config file (YAML or JSON); reloaded on SIGHUP")
+		// -tls-cert/-tls-key are also re-read on SIGHUP (certificate rotation).
 		listen      = fs.String("listen", ":8080", "proxy listen address")
 		adminListen = fs.String("admin-listen", "127.0.0.1:9901", "admin listen address")
 		tokenFile   = fs.String("admin-token-file", "", "file holding the admin bearer token (default: no auth; keep the admin port on localhost)")
@@ -103,11 +104,13 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 		return errors.New("give exactly one of -config or -upstream")
 	}
 	var tlsCfg *tls.Config
+	var certs *proxy.CertReloader
 	if *certFile != "" || *keyFile != "" {
 		var err error
-		if tlsCfg, err = proxy.TLSConfig(*certFile, *keyFile); err != nil {
+		if certs, err = proxy.NewCertReloader(*certFile, *keyFile); err != nil {
 			return err
 		}
+		tlsCfg = proxy.TLSConfigFrom(certs)
 	}
 	token := ""
 	if *tokenFile != "" {
@@ -168,7 +171,8 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	logger.Info("listening", "proxy", pl.Addr().String(), "admin", al.Addr().String(), "tls", tlsCfg != nil,
 		"config", st.Source, "config_hash", st.Hash, "admin_auth", token != "", "version", internal.Version)
 
-	// SIGHUP re-reads the config file. A bad file is logged and ignored.
+	// SIGHUP re-reads the TLS certificate and the config file, whichever are in
+	// use. A bad file is logged and ignored: the current one keeps serving.
 	hup := make(chan os.Signal, 1)
 	signal.Notify(hup, syscall.SIGHUP)
 	defer signal.Stop(hup)
@@ -178,8 +182,17 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 			case <-ctx.Done():
 				return
 			case <-hup:
-				if _, err := mgr.Reload(); err != nil {
-					logger.Warn("SIGHUP reload failed; previous config keeps serving", "error", err.Error())
+				if certs != nil {
+					if err := certs.Reload(); err != nil {
+						logger.Warn("SIGHUP certificate reload failed; previous certificate keeps serving", "error", err.Error())
+					} else {
+						logger.Info("certificate reloaded", "cert", *certFile)
+					}
+				}
+				if *configFile != "" {
+					if _, err := mgr.Reload(); err != nil {
+						logger.Warn("SIGHUP reload failed; previous config keeps serving", "error", err.Error())
+					}
 				}
 			}
 		}
