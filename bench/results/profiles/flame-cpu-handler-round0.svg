@@ -1,0 +1,293 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="373" font-family="Menlo,monospace" font-size="11">
+<rect width="100%" height="100%" fill="#fafafa"/><text x="600" y="20" font-size="15" text-anchor="middle">Proxy handler only (in-memory transport), CPU, round 0 (before)</text>
+<g><title>all (3.77s, 100.00%)</title><rect x="10.0" y="348" width="1180.0" height="16" fill="rgb(237,92,72)" rx="2"/><text x="13.0" y="360">all</text></g>
+<g><title>internal/chacha8rand.block (0.01s, 0.27%)</title><rect x="10.0" y="331" width="3.1" height="16" fill="rgb(226,151,61)" rx="2"/></g>
+<g><title>runtime.gcBgMarkWorker (0.01s, 0.27%)</title><rect x="13.1" y="331" width="3.1" height="16" fill="rgb(226,81,61)" rx="2"/></g>
+<g><title>runtime.systemstack (0.01s, 0.27%)</title><rect x="13.1" y="314" width="3.1" height="16" fill="rgb(223,158,58)" rx="2"/></g>
+<g><title>runtime.gcBgMarkWorker.func2 (0.01s, 0.27%)</title><rect x="13.1" y="297" width="3.1" height="16" fill="rgb(226,151,61)" rx="2"/></g>
+<g><title>runtime.gcDrainMarkWorkerIdle (0.01s, 0.27%)</title><rect x="13.1" y="280" width="3.1" height="16" fill="rgb(237,192,72)" rx="2"/></g>
+<g><title>runtime.gcDrain (0.01s, 0.27%)</title><rect x="13.1" y="263" width="3.1" height="16" fill="rgb(224,109,59)" rx="2"/></g>
+<g><title>runtime.markroot (0.01s, 0.27%)</title><rect x="13.1" y="246" width="3.1" height="16" fill="rgb(243,118,78)" rx="2"/></g>
+<g><title>runtime.markroot.func1 (0.01s, 0.27%)</title><rect x="13.1" y="229" width="3.1" height="16" fill="rgb(218,133,53)" rx="2"/></g>
+<g><title>runtime.scanstack (0.01s, 0.27%)</title><rect x="13.1" y="212" width="3.1" height="16" fill="rgb(211,86,46)" rx="2"/></g>
+<g><title>runtime.(*unwinder).init (0.01s, 0.27%)</title><rect x="13.1" y="195" width="3.1" height="16" fill="rgb(229,174,64)" rx="2"/></g>
+<g><title>runtime.(*unwinder).initAt (0.01s, 0.27%)</title><rect x="13.1" y="178" width="3.1" height="16" fill="rgb(214,99,49)" rx="2"/></g>
+<g><title>runtime.(*unwinder).resolveInternal (0.01s, 0.27%)</title><rect x="13.1" y="161" width="3.1" height="16" fill="rgb(214,169,49)" rx="2"/></g>
+<g><title>runtime.funcspdelta (0.01s, 0.27%)</title><rect x="13.1" y="144" width="3.1" height="16" fill="rgb(231,136,66)" rx="2"/></g>
+<g><title>runtime.pcvalue (0.01s, 0.27%)</title><rect x="13.1" y="127" width="3.1" height="16" fill="rgb(238,123,73)" rx="2"/></g>
+<g><title>runtime.step (0.01s, 0.27%)</title><rect x="13.1" y="110" width="3.1" height="16" fill="rgb(220,165,55)" rx="2"/></g>
+<g><title>runtime.mcall (0.02s, 0.53%)</title><rect x="16.3" y="331" width="6.3" height="16" fill="rgb(231,146,66)" rx="2"/></g>
+<g><title>runtime.park_m (0.02s, 0.53%)</title><rect x="16.3" y="314" width="6.3" height="16" fill="rgb(206,91,41)" rx="2"/></g>
+<g><title>runtime.schedule (0.02s, 0.53%)</title><rect x="16.3" y="297" width="6.3" height="16" fill="rgb(227,102,62)" rx="2"/></g>
+<g><title>runtime.findRunnable (0.02s, 0.53%)</title><rect x="16.3" y="280" width="6.3" height="16" fill="rgb(226,181,61)" rx="2"/></g>
+<g><title>runtime.stopm (0.02s, 0.53%)</title><rect x="16.3" y="263" width="6.3" height="16" fill="rgb(213,198,48)" rx="2"/></g>
+<g><title>runtime.mPark (0.02s, 0.53%)</title><rect x="16.3" y="246" width="6.3" height="16" fill="rgb(253,198,88)" rx="2"/></g>
+<g><title>runtime.notesleep (0.02s, 0.53%)</title><rect x="16.3" y="229" width="6.3" height="16" fill="rgb(227,82,62)" rx="2"/></g>
+<g><title>runtime.semasleep (0.02s, 0.53%)</title><rect x="16.3" y="212" width="6.3" height="16" fill="rgb(213,148,48)" rx="2"/></g>
+<g><title>runtime.pthread_cond_wait (0.02s, 0.53%)</title><rect x="16.3" y="195" width="6.3" height="16" fill="rgb(241,186,76)" rx="2"/></g>
+<g><title>runtime.morestack (0.02s, 0.53%)</title><rect x="22.5" y="331" width="6.3" height="16" fill="rgb(247,122,82)" rx="2"/></g>
+<g><title>runtime.newstack (0.02s, 0.53%)</title><rect x="22.5" y="314" width="6.3" height="16" fill="rgb(242,97,77)" rx="2"/></g>
+<g><title>runtime.gopreempt_m (0.01s, 0.27%)</title><rect x="22.5" y="297" width="3.1" height="16" fill="rgb(227,112,62)" rx="2"/></g>
+<g><title>runtime.goschedImpl (0.01s, 0.27%)</title><rect x="22.5" y="280" width="3.1" height="16" fill="rgb(211,126,46)" rx="2"/></g>
+<g><title>runtime.lock (0.01s, 0.27%)</title><rect x="22.5" y="263" width="3.1" height="16" fill="rgb(247,152,82)" rx="2"/></g>
+<g><title>runtime.lockWithRank (0.01s, 0.27%)</title><rect x="22.5" y="246" width="3.1" height="16" fill="rgb(251,86,86)" rx="2"/></g>
+<g><title>runtime.lock2 (0.01s, 0.27%)</title><rect x="22.5" y="229" width="3.1" height="16" fill="rgb(207,142,42)" rx="2"/></g>
+<g><title>runtime.osyield (0.01s, 0.27%)</title><rect x="22.5" y="212" width="3.1" height="16" fill="rgb(221,106,56)" rx="2"/></g>
+<g><title>runtime.usleep (0.01s, 0.27%)</title><rect x="22.5" y="195" width="3.1" height="16" fill="rgb(246,81,81)" rx="2"/></g>
+<g><title>runtime.preemptPark (0.01s, 0.27%)</title><rect x="25.6" y="297" width="3.1" height="16" fill="rgb(215,130,50)" rx="2"/></g>
+<g><title>runtime.schedule (0.01s, 0.27%)</title><rect x="25.6" y="280" width="3.1" height="16" fill="rgb(227,102,62)" rx="2"/></g>
+<g><title>runtime.findRunnable (0.01s, 0.27%)</title><rect x="25.6" y="263" width="3.1" height="16" fill="rgb(226,181,61)" rx="2"/></g>
+<g><title>runtime.stealWork (0.01s, 0.27%)</title><rect x="25.6" y="246" width="3.1" height="16" fill="rgb(238,183,73)" rx="2"/></g>
+<g><title>runtime.systemstack (2.91s, 77.19%)</title><rect x="28.8" y="331" width="910.8" height="16" fill="rgb(223,158,58)" rx="2"/><text x="31.8" y="343">runtime.systemstack</text></g>
+<g><title>runtime.(*mheap).alloc.func1 (0.13s, 3.45%)</title><rect x="28.8" y="314" width="40.7" height="16" fill="rgb(236,161,71)" rx="2"/><text x="31.8" y="326">run..</text></g>
+<g><title>runtime.(*mheap).allocSpan (0.13s, 3.45%)</title><rect x="28.8" y="297" width="40.7" height="16" fill="rgb(243,138,78)" rx="2"/><text x="31.8" y="309">run..</text></g>
+<g><title>runtime.sysUsed (0.13s, 3.45%)</title><rect x="28.8" y="280" width="40.7" height="16" fill="rgb(210,185,45)" rx="2"/><text x="31.8" y="292">run..</text></g>
+<g><title>runtime.sysUsedOS (0.13s, 3.45%)</title><rect x="28.8" y="263" width="40.7" height="16" fill="rgb(254,179,89)" rx="2"/><text x="31.8" y="275">run..</text></g>
+<g><title>runtime.madvise (0.13s, 3.45%)</title><rect x="28.8" y="246" width="40.7" height="16" fill="rgb(221,146,56)" rx="2"/><text x="31.8" y="258">run..</text></g>
+<g><title>runtime.forEachP.func1 (0.03s, 0.80%)</title><rect x="69.5" y="314" width="9.4" height="16" fill="rgb(237,182,72)" rx="2"/></g>
+<g><title>runtime.forEachPInternal (0.03s, 0.80%)</title><rect x="69.5" y="297" width="9.4" height="16" fill="rgb(233,88,68)" rx="2"/></g>
+<g><title>runtime.notetsleep (0.01s, 0.27%)</title><rect x="69.5" y="280" width="3.1" height="16" fill="rgb(243,188,78)" rx="2"/></g>
+<g><title>runtime.notetsleep_internal (0.01s, 0.27%)</title><rect x="69.5" y="263" width="3.1" height="16" fill="rgb(217,172,52)" rx="2"/></g>
+<g><title>runtime.semasleep (0.01s, 0.27%)</title><rect x="69.5" y="246" width="3.1" height="16" fill="rgb(213,148,48)" rx="2"/></g>
+<g><title>runtime.pthread_cond_timedwait_relative_np (0.01s, 0.27%)</title><rect x="69.5" y="229" width="3.1" height="16" fill="rgb(250,115,85)" rx="2"/></g>
+<g><title>runtime.preemptall (0.02s, 0.53%)</title><rect x="72.6" y="280" width="6.3" height="16" fill="rgb(226,81,61)" rx="2"/></g>
+<g><title>runtime.preemptone (0.02s, 0.53%)</title><rect x="72.6" y="263" width="6.3" height="16" fill="rgb(217,162,52)" rx="2"/></g>
+<g><title>runtime.preemptM (0.02s, 0.53%)</title><rect x="72.6" y="246" width="6.3" height="16" fill="rgb(210,165,45)" rx="2"/></g>
+<g><title>runtime.signalM (0.02s, 0.53%)</title><rect x="72.6" y="229" width="6.3" height="16" fill="rgb(253,118,88)" rx="2"/></g>
+<g><title>runtime.pthread_kill (0.02s, 0.53%)</title><rect x="72.6" y="212" width="6.3" height="16" fill="rgb(239,174,74)" rx="2"/></g>
+<g><title>runtime.gcStart.func4 (2.74s, 72.68%)</title><rect x="78.9" y="314" width="857.6" height="16" fill="rgb(232,187,67)" rx="2"/><text x="81.9" y="326">runtime.gcStart.func4</text></g>
+<g><title>runtime.startTheWorldWithSema (2.74s, 72.68%)</title><rect x="78.9" y="297" width="857.6" height="16" fill="rgb(223,198,58)" rx="2"/><text x="81.9" y="309">runtime.startTheWorldWithSema</text></g>
+<g><title>runtime.netpoll (2.74s, 72.68%)</title><rect x="78.9" y="280" width="857.6" height="16" fill="rgb(210,155,45)" rx="2"/><text x="81.9" y="292">runtime.netpoll</text></g>
+<g><title>runtime.kevent (2.74s, 72.68%)</title><rect x="78.9" y="263" width="857.6" height="16" fill="rgb(227,132,62)" rx="2"/><text x="81.9" y="275">runtime.kevent</text></g>
+<g><title>runtime.reentersyscall.func4 (0.01s, 0.27%)</title><rect x="936.5" y="314" width="3.1" height="16" fill="rgb(244,109,79)" rx="2"/></g>
+<g><title>runtime.entersyscallHandleGCWait (0.01s, 0.27%)</title><rect x="936.5" y="297" width="3.1" height="16" fill="rgb(230,185,65)" rx="2"/></g>
+<g><title>runtime.notewakeup (0.01s, 0.27%)</title><rect x="936.5" y="280" width="3.1" height="16" fill="rgb(251,186,86)" rx="2"/></g>
+<g><title>runtime.semawakeup (0.01s, 0.27%)</title><rect x="936.5" y="263" width="3.1" height="16" fill="rgb(227,92,62)" rx="2"/></g>
+<g><title>runtime.pthread_cond_signal (0.01s, 0.27%)</title><rect x="936.5" y="246" width="3.1" height="16" fill="rgb(222,187,57)" rx="2"/></g>
+<g><title>testing.(*B).launch (0.80s, 21.22%)</title><rect x="939.6" y="331" width="250.4" height="16" fill="rgb(210,105,45)" rx="2"/><text x="942.6" y="343">testing.(*B).launch</text></g>
+<g><title>testing.(*B).runN (0.80s, 21.22%)</title><rect x="939.6" y="314" width="250.4" height="16" fill="rgb(242,147,77)" rx="2"/><text x="942.6" y="326">testing.(*B).runN</text></g>
+<g><title>github.com/AaronRaj06/portcullis/internal/proxy.BenchmarkHandler.func1 (0.80s, 21.22%)</title><rect x="939.6" y="297" width="250.4" height="16" fill="rgb(107,157,227)" rx="2"/><text x="942.6" y="309">github.com/AaronRaj06/portcullis/..</text></g>
+<g><title>github.com/AaronRaj06/portcullis/internal/proxy.(*Handler).ServeHTTP (0.80s, 21.22%)</title><rect x="939.6" y="280" width="250.4" height="16" fill="rgb(113,173,248)" rx="2"/><text x="942.6" y="292">github.com/AaronRaj06/portcullis/..</text></g>
+<g><title>github.com/AaronRaj06/portcullis/internal/lb.(*Pool).Pick (0.02s, 0.53%)</title><rect x="939.6" y="263" width="6.3" height="16" fill="rgb(95,175,230)" rx="2"/></g>
+<g><title>time.Now (0.02s, 0.53%)</title><rect x="939.6" y="246" width="6.3" height="16" fill="rgb(239,94,74)" rx="2"/></g>
+<g><title>time.runtimeNow (0.02s, 0.53%)</title><rect x="939.6" y="229" width="6.3" height="16" fill="rgb(229,174,64)" rx="2"/></g>
+<g><title>time.now (0.02s, 0.53%)</title><rect x="939.6" y="212" width="6.3" height="16" fill="rgb(213,158,48)" rx="2"/></g>
+<g><title>runtime.nanotime (0.02s, 0.53%)</title><rect x="939.6" y="195" width="6.3" height="16" fill="rgb(247,132,82)" rx="2"/></g>
+<g><title>runtime.nanotime1 (0.02s, 0.53%)</title><rect x="939.6" y="178" width="6.3" height="16" fill="rgb(224,159,59)" rx="2"/></g>
+<g><title>github.com/AaronRaj06/portcullis/internal/proxy.(*Handler).ServeHTTP.func1 (0.07s, 1.86%)</title><rect x="945.9" y="263" width="21.9" height="16" fill="rgb(90,190,220)" rx="2"/></g>
+<g><title>github.com/AaronRaj06/portcullis/internal/metrics.(*Metrics).Done (0.05s, 1.33%)</title><rect x="945.9" y="246" width="15.6" height="16" fill="rgb(94,194,234)" rx="2"/></g>
+<g><title>github.com/prometheus/client_golang/prometheus.(*CounterVec).WithLabelValues (0.04s, 1.06%)</title><rect x="945.9" y="229" width="12.5" height="16" fill="rgb(210,175,45)" rx="2"/></g>
+<g><title>github.com/prometheus/client_golang/prometheus.(*CounterVec).GetMetricWithLabelValues (0.04s, 1.06%)</title><rect x="945.9" y="212" width="12.5" height="16" fill="rgb(248,153,83)" rx="2"/></g>
+<g><title>github.com/prometheus/client_golang/prometheus.(*MetricVec).GetMetricWithLabelValues (0.04s, 1.06%)</title><rect x="945.9" y="195" width="12.5" height="16" fill="rgb(254,129,89)" rx="2"/></g>
+<g><title>github.com/prometheus/client_golang/prometheus.(*MetricVec).hashLabelValues (0.03s, 0.80%)</title><rect x="945.9" y="178" width="9.4" height="16" fill="rgb(236,191,71)" rx="2"/></g>
+<g><title>github.com/prometheus/client_golang/prometheus.validateLabelValues (0.03s, 0.80%)</title><rect x="945.9" y="161" width="9.4" height="16" fill="rgb(235,80,70)" rx="2"/></g>
+<g><title>unicode/utf8.ValidString (0.02s, 0.53%)</title><rect x="945.9" y="144" width="6.3" height="16" fill="rgb(232,127,67)" rx="2"/></g>
+<g><title>github.com/prometheus/client_golang/prometheus.(*metricMap).getOrCreateMetricWithLabelValues (0.01s, 0.27%)</title><rect x="955.3" y="178" width="3.1" height="16" fill="rgb(229,154,64)" rx="2"/></g>
+<g><title>github.com/prometheus/client_golang/prometheus.(*metricMap).getMetricWithHashAndLabelValues (0.01s, 0.27%)</title><rect x="955.3" y="161" width="3.1" height="16" fill="rgb(207,132,42)" rx="2"/></g>
+<g><title>runtime.mapaccess2_fast64 (0.01s, 0.27%)</title><rect x="955.3" y="144" width="3.1" height="16" fill="rgb(247,182,82)" rx="2"/></g>
+<g><title>time.Since (0.01s, 0.27%)</title><rect x="961.5" y="246" width="3.1" height="16" fill="rgb(209,184,44)" rx="2"/></g>
+<g><title>time.runtimeNano (0.01s, 0.27%)</title><rect x="961.5" y="229" width="3.1" height="16" fill="rgb(247,112,82)" rx="2"/></g>
+<g><title>runtime.nanotime (0.01s, 0.27%)</title><rect x="961.5" y="212" width="3.1" height="16" fill="rgb(247,132,82)" rx="2"/></g>
+<g><title>runtime.nanotime1 (0.01s, 0.27%)</title><rect x="961.5" y="195" width="3.1" height="16" fill="rgb(224,159,59)" rx="2"/></g>
+<g><title>github.com/AaronRaj06/portcullis/internal/proxy.(*Handler).outbound (0.31s, 8.22%)</title><rect x="967.8" y="263" width="97.0" height="16" fill="rgb(90,190,220)" rx="2"/><text x="970.8" y="275">github.com/..</text></g>
+<g><title>github.com/AaronRaj06/portcullis/internal/proxy.removeHopByHop (0.04s, 1.06%)</title><rect x="967.8" y="246" width="12.5" height="16" fill="rgb(104,164,254)" rx="2"/></g>
+<g><title>runtime.mapaccess1_faststr (0.01s, 0.27%)</title><rect x="967.8" y="229" width="3.1" height="16" fill="rgb(247,122,82)" rx="2"/></g>
+<g><title>runtime.mapaccess2_faststr (0.01s, 0.27%)</title><rect x="967.8" y="212" width="3.1" height="16" fill="rgb(218,123,53)" rx="2"/></g>
+<g><title>internal/runtime/maps.(*Map).getWithoutKeySmallFastStr (0.01s, 0.27%)</title><rect x="967.8" y="195" width="3.1" height="16" fill="rgb(222,117,57)" rx="2"/></g>
+<g><title>runtime.mapdelete_faststr (0.03s, 0.80%)</title><rect x="970.9" y="229" width="9.4" height="16" fill="rgb(207,162,42)" rx="2"/></g>
+<g><title>internal/runtime/maps.(*Map).Delete (0.03s, 0.80%)</title><rect x="970.9" y="212" width="9.4" height="16" fill="rgb(254,109,89)" rx="2"/></g>
+<g><title>runtime.strhash (0.01s, 0.27%)</title><rect x="970.9" y="195" width="3.1" height="16" fill="rgb(239,114,74)" rx="2"/></g>
+<g><title>internal/runtime/maps.StrHash (0.01s, 0.27%)</title><rect x="970.9" y="178" width="3.1" height="16" fill="rgb(231,186,66)" rx="2"/></g>
+<g><title>internal/runtime/maps.MemHash (0.01s, 0.27%)</title><rect x="970.9" y="161" width="3.1" height="16" fill="rgb(205,140,40)" rx="2"/></g>
+<g><title>internal/runtime/maps.memHashAES (0.01s, 0.27%)</title><rect x="970.9" y="144" width="3.1" height="16" fill="rgb(224,159,59)" rx="2"/></g>
+<g><title>github.com/AaronRaj06/portcullis/internal/proxy.setForwarded (0.16s, 4.24%)</title><rect x="980.3" y="246" width="50.1" height="16" fill="rgb(129,189,244)" rx="2"/><text x="983.3" y="258">githu..</text></g>
+<g><title>github.com/AaronRaj06/portcullis/internal/proxy.via (0.03s, 0.80%)</title><rect x="980.3" y="229" width="9.4" height="16" fill="rgb(123,193,243)" rx="2"/></g>
+<g><title>runtime.concatstring4 (0.02s, 0.53%)</title><rect x="980.3" y="212" width="6.3" height="16" fill="rgb(211,106,46)" rx="2"/></g>
+<g><title>runtime.concatstrings (0.02s, 0.53%)</title><rect x="980.3" y="195" width="6.3" height="16" fill="rgb(232,107,67)" rx="2"/></g>
+<g><title>runtime.memmove (0.01s, 0.27%)</title><rect x="980.3" y="178" width="3.1" height="16" fill="rgb(206,161,41)" rx="2"/></g>
+<g><title>runtime.rawstringtmp (0.01s, 0.27%)</title><rect x="983.4" y="178" width="3.1" height="16" fill="rgb(230,175,65)" rx="2"/></g>
+<g><title>runtime.rawstring (0.01s, 0.27%)</title><rect x="983.4" y="161" width="3.1" height="16" fill="rgb(215,130,50)" rx="2"/></g>
+<g><title>runtime.mallocgc (0.01s, 0.27%)</title><rect x="983.4" y="144" width="3.1" height="16" fill="rgb(232,177,67)" rx="2"/></g>
+<g><title>runtime.mallocgcTinySC2 (0.01s, 0.27%)</title><rect x="983.4" y="127" width="3.1" height="16" fill="rgb(248,173,83)" rx="2"/></g>
+<g><title>runtime.profilealloc (0.01s, 0.27%)</title><rect x="983.4" y="110" width="3.1" height="16" fill="rgb(212,117,47)" rx="2"/></g>
+<g><title>runtime.mProf_Malloc (0.01s, 0.27%)</title><rect x="983.4" y="93" width="3.1" height="16" fill="rgb(221,126,56)" rx="2"/></g>
+<g><title>runtime.stkbucket (0.01s, 0.27%)</title><rect x="983.4" y="76" width="3.1" height="16" fill="rgb(214,139,49)" rx="2"/></g>
+<g><title>internal/runtime/atomic.(*UnsafePointer).Load (0.01s, 0.27%)</title><rect x="983.4" y="59" width="3.1" height="16" fill="rgb(206,101,41)" rx="2"/></g>
+<g><title>net/http.Header.Add (0.03s, 0.80%)</title><rect x="989.7" y="229" width="9.4" height="16" fill="rgb(214,189,49)" rx="2"/></g>
+<g><title>net/textproto.MIMEHeader.Add (0.03s, 0.80%)</title><rect x="989.7" y="212" width="9.4" height="16" fill="rgb(247,182,82)" rx="2"/></g>
+<g><title>net/textproto.CanonicalMIMEHeaderKey (0.01s, 0.27%)</title><rect x="989.7" y="195" width="3.1" height="16" fill="rgb(253,188,88)" rx="2"/></g>
+<g><title>net/textproto.validHeaderFieldByte (0.01s, 0.27%)</title><rect x="989.7" y="178" width="3.1" height="16" fill="rgb(224,189,59)" rx="2"/></g>
+<g><title>runtime.growslice (0.01s, 0.27%)</title><rect x="992.8" y="195" width="3.1" height="16" fill="rgb(215,110,50)" rx="2"/></g>
+<g><title>runtime.mallocgc (0.01s, 0.27%)</title><rect x="992.8" y="178" width="3.1" height="16" fill="rgb(232,177,67)" rx="2"/></g>
+<g><title>runtime.mallocgcSmallScanNoHeaderSC2 (0.01s, 0.27%)</title><rect x="992.8" y="161" width="3.1" height="16" fill="rgb(244,109,79)" rx="2"/></g>
+<g><title>runtime.gcTrigger.test (0.01s, 0.27%)</title><rect x="992.8" y="144" width="3.1" height="16" fill="rgb(252,87,87)" rx="2"/></g>
+<g><title>runtime.(*gcControllerState).trigger (0.01s, 0.27%)</title><rect x="992.8" y="127" width="3.1" height="16" fill="rgb(208,133,43)" rx="2"/></g>
+<g><title>runtime.(*gcControllerState).heapGoalInternal (0.01s, 0.27%)</title><rect x="992.8" y="110" width="3.1" height="16" fill="rgb(240,195,75)" rx="2"/></g>
+<g><title>runtime.(*gcControllerState).memoryLimitHeapGoal (0.01s, 0.27%)</title><rect x="992.8" y="93" width="3.1" height="16" fill="rgb(205,90,40)" rx="2"/></g>
+<g><title>runtime.(*sysMemStat).load (0.01s, 0.27%)</title><rect x="992.8" y="76" width="3.1" height="16" fill="rgb(233,98,68)" rx="2"/></g>
+<g><title>runtime.mapassign_faststr (0.01s, 0.27%)</title><rect x="995.9" y="195" width="3.1" height="16" fill="rgb(251,136,86)" rx="2"/></g>
+<g><title>internal/runtime/maps.(*Map).putSlotSmallFastStr (0.01s, 0.27%)</title><rect x="995.9" y="178" width="3.1" height="16" fill="rgb(252,127,87)" rx="2"/></g>
+<g><title>net/http.Header.Get (0.03s, 0.80%)</title><rect x="999.1" y="229" width="9.4" height="16" fill="rgb(253,178,88)" rx="2"/></g>
+<g><title>net/textproto.MIMEHeader.Get (0.03s, 0.80%)</title><rect x="999.1" y="212" width="9.4" height="16" fill="rgb(254,149,89)" rx="2"/></g>
+<g><title>net/textproto.CanonicalMIMEHeaderKey (0.03s, 0.80%)</title><rect x="999.1" y="195" width="9.4" height="16" fill="rgb(253,188,88)" rx="2"/></g>
+<g><title>net/textproto.validHeaderFieldByte (0.01s, 0.27%)</title><rect x="999.1" y="178" width="3.1" height="16" fill="rgb(224,189,59)" rx="2"/></g>
+<g><title>net/http.Header.Set (0.04s, 1.06%)</title><rect x="1008.5" y="229" width="12.5" height="16" fill="rgb(205,110,40)" rx="2"/></g>
+<g><title>net/textproto.MIMEHeader.Set (0.04s, 1.06%)</title><rect x="1008.5" y="212" width="12.5" height="16" fill="rgb(216,81,51)" rx="2"/></g>
+<g><title>net/textproto.CanonicalMIMEHeaderKey (0.01s, 0.27%)</title><rect x="1008.5" y="195" width="3.1" height="16" fill="rgb(253,188,88)" rx="2"/></g>
+<g><title>net/textproto.validHeaderFieldByte (0.01s, 0.27%)</title><rect x="1008.5" y="178" width="3.1" height="16" fill="rgb(224,189,59)" rx="2"/></g>
+<g><title>runtime.mallocgcSmallScanNoHeaderSC2 (0.02s, 0.53%)</title><rect x="1011.6" y="195" width="6.3" height="16" fill="rgb(244,109,79)" rx="2"/></g>
+<g><title>runtime.mapassign_faststr (0.01s, 0.27%)</title><rect x="1017.9" y="195" width="3.1" height="16" fill="rgb(251,136,86)" rx="2"/></g>
+<g><title>internal/runtime/maps.memHashAES (0.01s, 0.27%)</title><rect x="1017.9" y="178" width="3.1" height="16" fill="rgb(224,159,59)" rx="2"/></g>
+<g><title>net/netip.Addr.String (0.01s, 0.27%)</title><rect x="1021.0" y="229" width="3.1" height="16" fill="rgb(212,117,47)" rx="2"/></g>
+<g><title>runtime.slicebytetostring (0.01s, 0.27%)</title><rect x="1021.0" y="212" width="3.1" height="16" fill="rgb(242,117,77)" rx="2"/></g>
+<g><title>runtime.mallocgc (0.01s, 0.27%)</title><rect x="1021.0" y="195" width="3.1" height="16" fill="rgb(232,177,67)" rx="2"/></g>
+<g><title>runtime.mallocgcTinySC2 (0.01s, 0.27%)</title><rect x="1021.0" y="178" width="3.1" height="16" fill="rgb(248,173,83)" rx="2"/></g>
+<g><title>runtime.mapdelete_faststr (0.02s, 0.53%)</title><rect x="1024.1" y="229" width="6.3" height="16" fill="rgb(207,162,42)" rx="2"/></g>
+<g><title>internal/runtime/maps.(*Map).Delete (0.02s, 0.53%)</title><rect x="1024.1" y="212" width="6.3" height="16" fill="rgb(254,109,89)" rx="2"/></g>
+<g><title>internal/runtime/maps.(*Map).Used (0.01s, 0.27%)</title><rect x="1024.1" y="195" width="3.1" height="16" fill="rgb(230,115,65)" rx="2"/></g>
+<g><title>runtime.strhash (0.01s, 0.27%)</title><rect x="1027.2" y="195" width="3.1" height="16" fill="rgb(239,114,74)" rx="2"/></g>
+<g><title>net/http.(*Request).WithContext (0.04s, 1.06%)</title><rect x="1030.4" y="246" width="12.5" height="16" fill="rgb(247,122,82)" rx="2"/></g>
+<g><title>runtime.newobject (0.03s, 0.80%)</title><rect x="1030.4" y="229" width="9.4" height="16" fill="rgb(233,148,68)" rx="2"/></g>
+<g><title>runtime.mallocgc (0.03s, 0.80%)</title><rect x="1030.4" y="212" width="9.4" height="16" fill="rgb(232,177,67)" rx="2"/></g>
+<g><title>runtime.mallocgcSmallScanNoHeader (0.03s, 0.80%)</title><rect x="1030.4" y="195" width="9.4" height="16" fill="rgb(250,95,85)" rx="2"/></g>
+<g><title>runtime.profilealloc (0.01s, 0.27%)</title><rect x="1030.4" y="178" width="3.1" height="16" fill="rgb(212,117,47)" rx="2"/></g>
+<g><title>runtime.mProf_Malloc (0.01s, 0.27%)</title><rect x="1030.4" y="161" width="3.1" height="16" fill="rgb(221,126,56)" rx="2"/></g>
+<g><title>runtime.stkbucket (0.01s, 0.27%)</title><rect x="1030.4" y="144" width="3.1" height="16" fill="rgb(214,139,49)" rx="2"/></g>
+<g><title>internal/runtime/atomic.(*UnsafePointer).Load (0.01s, 0.27%)</title><rect x="1030.4" y="127" width="3.1" height="16" fill="rgb(206,101,41)" rx="2"/></g>
+<g><title>net/http.Header.Clone (0.04s, 1.06%)</title><rect x="1042.9" y="246" width="12.5" height="16" fill="rgb(230,155,65)" rx="2"/></g>
+<g><title>runtime.makeslice (0.01s, 0.27%)</title><rect x="1042.9" y="229" width="3.1" height="16" fill="rgb(222,97,57)" rx="2"/></g>
+<g><title>runtime.mallocgc (0.01s, 0.27%)</title><rect x="1042.9" y="212" width="3.1" height="16" fill="rgb(232,177,67)" rx="2"/></g>
+<g><title>runtime.mallocgcSmallScanNoHeaderSC4 (0.01s, 0.27%)</title><rect x="1042.9" y="195" width="3.1" height="16" fill="rgb(230,115,65)" rx="2"/></g>
+<g><title>runtime.mapIterStart (0.03s, 0.80%)</title><rect x="1046.0" y="229" width="9.4" height="16" fill="rgb(220,175,55)" rx="2"/></g>
+<g><title>internal/runtime/maps.(*Iter).Init (0.02s, 0.53%)</title><rect x="1046.0" y="212" width="6.3" height="16" fill="rgb(229,134,64)" rx="2"/></g>
+<g><title>internal/runtime/maps.rand (0.01s, 0.27%)</title><rect x="1046.0" y="195" width="3.1" height="16" fill="rgb(233,128,68)" rx="2"/></g>
+<g><title>runtime.rand (0.01s, 0.27%)</title><rect x="1046.0" y="178" width="3.1" height="16" fill="rgb(219,144,54)" rx="2"/></g>
+<g><title>internal/chacha8rand.(*State).Next (0.01s, 0.27%)</title><rect x="1046.0" y="161" width="3.1" height="16" fill="rgb(236,191,71)" rx="2"/></g>
+<g><title>internal/runtime/maps.(*Iter).Next (0.01s, 0.27%)</title><rect x="1052.3" y="212" width="3.1" height="16" fill="rgb(218,133,53)" rx="2"/></g>
+<g><title>runtime.mapaccess2_faststr (0.01s, 0.27%)</title><rect x="1055.4" y="246" width="3.1" height="16" fill="rgb(218,123,53)" rx="2"/></g>
+<g><title>runtime.newobject (0.02s, 0.53%)</title><rect x="1058.5" y="246" width="6.3" height="16" fill="rgb(233,148,68)" rx="2"/></g>
+<g><title>runtime.mallocgc (0.02s, 0.53%)</title><rect x="1058.5" y="229" width="6.3" height="16" fill="rgb(232,177,67)" rx="2"/></g>
+<g><title>runtime.mallocgcSmallScanNoHeader (0.02s, 0.53%)</title><rect x="1058.5" y="212" width="6.3" height="16" fill="rgb(250,95,85)" rx="2"/></g>
+<g><title>runtime.heapSetTypeNoHeader (0.01s, 0.27%)</title><rect x="1058.5" y="195" width="3.1" height="16" fill="rgb(240,185,75)" rx="2"/></g>
+<g><title>runtime.(*mspan).writeHeapBitsSmall (0.01s, 0.27%)</title><rect x="1058.5" y="178" width="3.1" height="16" fill="rgb(230,95,65)" rx="2"/></g>
+<g><title>github.com/AaronRaj06/portcullis/internal/proxy.(*Handler).serveResponse (0.10s, 2.65%)</title><rect x="1064.8" y="263" width="31.3" height="16" fill="rgb(126,176,251)" rx="2"/><text x="1067.8" y="275">gi..</text></g>
+<g><title>github.com/AaronRaj06/portcullis/internal/proxy.(*Handler).copyBody (0.03s, 0.80%)</title><rect x="1064.8" y="246" width="9.4" height="16" fill="rgb(99,189,244)" rx="2"/></g>
+<g><title>github.com/AaronRaj06/portcullis/internal/proxy.(*Handler).extendWrite (0.02s, 0.53%)</title><rect x="1064.8" y="229" width="6.3" height="16" fill="rgb(101,191,236)" rx="2"/></g>
+<g><title>time.Now (0.02s, 0.53%)</title><rect x="1064.8" y="212" width="6.3" height="16" fill="rgb(239,94,74)" rx="2"/></g>
+<g><title>time.runtimeNow (0.02s, 0.53%)</title><rect x="1064.8" y="195" width="6.3" height="16" fill="rgb(229,174,64)" rx="2"/></g>
+<g><title>time.now (0.02s, 0.53%)</title><rect x="1064.8" y="178" width="6.3" height="16" fill="rgb(213,158,48)" rx="2"/></g>
+<g><title>runtime.nanotime (0.01s, 0.27%)</title><rect x="1064.8" y="161" width="3.1" height="16" fill="rgb(247,132,82)" rx="2"/></g>
+<g><title>runtime.nanotime1 (0.01s, 0.27%)</title><rect x="1064.8" y="144" width="3.1" height="16" fill="rgb(224,159,59)" rx="2"/></g>
+<g><title>runtime.walltime (0.01s, 0.27%)</title><rect x="1067.9" y="161" width="3.1" height="16" fill="rgb(235,90,70)" rx="2"/></g>
+<g><title>net/http.Header.Get (0.01s, 0.27%)</title><rect x="1071.1" y="229" width="3.1" height="16" fill="rgb(253,178,88)" rx="2"/></g>
+<g><title>net/textproto.MIMEHeader.Get (0.01s, 0.27%)</title><rect x="1071.1" y="212" width="3.1" height="16" fill="rgb(254,149,89)" rx="2"/></g>
+<g><title>runtime.mapaccess1_faststr (0.01s, 0.27%)</title><rect x="1071.1" y="195" width="3.1" height="16" fill="rgb(247,122,82)" rx="2"/></g>
+<g><title>runtime.mapaccess2_faststr (0.01s, 0.27%)</title><rect x="1071.1" y="178" width="3.1" height="16" fill="rgb(218,123,53)" rx="2"/></g>
+<g><title>internal/runtime/maps.(*Map).getWithoutKeySmallFastStr (0.01s, 0.27%)</title><rect x="1071.1" y="161" width="3.1" height="16" fill="rgb(222,117,57)" rx="2"/></g>
+<g><title>internal/runtime/maps.memHashAES (0.01s, 0.27%)</title><rect x="1071.1" y="144" width="3.1" height="16" fill="rgb(224,159,59)" rx="2"/></g>
+<g><title>github.com/AaronRaj06/portcullis/internal/proxy.(*Handler).extendWrite (0.01s, 0.27%)</title><rect x="1074.2" y="246" width="3.1" height="16" fill="rgb(101,191,236)" rx="2"/></g>
+<g><title>time.Now (0.01s, 0.27%)</title><rect x="1074.2" y="229" width="3.1" height="16" fill="rgb(239,94,74)" rx="2"/></g>
+<g><title>time.runtimeNow (0.01s, 0.27%)</title><rect x="1074.2" y="212" width="3.1" height="16" fill="rgb(229,174,64)" rx="2"/></g>
+<g><title>time.now (0.01s, 0.27%)</title><rect x="1074.2" y="195" width="3.1" height="16" fill="rgb(213,158,48)" rx="2"/></g>
+<g><title>runtime.walltime (0.01s, 0.27%)</title><rect x="1074.2" y="178" width="3.1" height="16" fill="rgb(235,90,70)" rx="2"/></g>
+<g><title>github.com/AaronRaj06/portcullis/internal/proxy.removeHopByHop (0.01s, 0.27%)</title><rect x="1077.3" y="246" width="3.1" height="16" fill="rgb(104,164,254)" rx="2"/></g>
+<g><title>runtime.mapdelete_faststr (0.01s, 0.27%)</title><rect x="1077.3" y="229" width="3.1" height="16" fill="rgb(207,162,42)" rx="2"/></g>
+<g><title>internal/runtime/maps.(*Map).Delete (0.01s, 0.27%)</title><rect x="1077.3" y="212" width="3.1" height="16" fill="rgb(254,109,89)" rx="2"/></g>
+<g><title>internal/runtime/maps.(*Map).deleteSmall (0.01s, 0.27%)</title><rect x="1077.3" y="195" width="3.1" height="16" fill="rgb(247,92,82)" rx="2"/></g>
+<g><title>net/http.Header.Add (0.01s, 0.27%)</title><rect x="1080.5" y="246" width="3.1" height="16" fill="rgb(214,189,49)" rx="2"/></g>
+<g><title>net/textproto.MIMEHeader.Add (0.01s, 0.27%)</title><rect x="1080.5" y="229" width="3.1" height="16" fill="rgb(247,182,82)" rx="2"/></g>
+<g><title>runtime.mapassign_faststr (0.01s, 0.27%)</title><rect x="1080.5" y="212" width="3.1" height="16" fill="rgb(251,136,86)" rx="2"/></g>
+<g><title>internal/runtime/maps.memHashAES (0.01s, 0.27%)</title><rect x="1080.5" y="195" width="3.1" height="16" fill="rgb(224,159,59)" rx="2"/></g>
+<g><title>runtime.mapIterNext (0.02s, 0.53%)</title><rect x="1083.6" y="246" width="6.3" height="16" fill="rgb(251,136,86)" rx="2"/></g>
+<g><title>internal/runtime/maps.(*Iter).Next (0.02s, 0.53%)</title><rect x="1083.6" y="229" width="6.3" height="16" fill="rgb(218,133,53)" rx="2"/></g>
+<g><title>runtime.mapIterStart (0.02s, 0.53%)</title><rect x="1089.8" y="246" width="6.3" height="16" fill="rgb(220,175,55)" rx="2"/></g>
+<g><title>internal/runtime/maps.(*Iter).Next (0.01s, 0.27%)</title><rect x="1089.8" y="229" width="3.1" height="16" fill="rgb(218,133,53)" rx="2"/></g>
+<g><title>github.com/AaronRaj06/portcullis/internal/proxy.(*Router).Match (0.01s, 0.27%)</title><rect x="1096.1" y="263" width="3.1" height="16" fill="rgb(114,154,249)" rx="2"/></g>
+<g><title>github.com/AaronRaj06/portcullis/internal/proxy.normalizeHost (0.01s, 0.27%)</title><rect x="1096.1" y="246" width="3.1" height="16" fill="rgb(106,166,231)" rx="2"/></g>
+<g><title>strings.LastIndexByte (0.01s, 0.27%)</title><rect x="1096.1" y="229" width="3.1" height="16" fill="rgb(236,181,71)" rx="2"/></g>
+<g><title>internal/bytealg.LastIndexByteString (0.01s, 0.27%)</title><rect x="1096.1" y="212" width="3.1" height="16" fill="rgb(229,134,64)" rx="2"/></g>
+<g><title>github.com/AaronRaj06/portcullis/internal/proxy.forBackend (0.03s, 0.80%)</title><rect x="1099.2" y="263" width="9.4" height="16" fill="rgb(100,150,225)" rx="2"/></g>
+<g><title>net/http.(*Request).WithContext (0.02s, 0.53%)</title><rect x="1099.2" y="246" width="6.3" height="16" fill="rgb(247,122,82)" rx="2"/></g>
+<g><title>runtime.newobject (0.02s, 0.53%)</title><rect x="1099.2" y="229" width="6.3" height="16" fill="rgb(233,148,68)" rx="2"/></g>
+<g><title>runtime.mallocgc (0.02s, 0.53%)</title><rect x="1099.2" y="212" width="6.3" height="16" fill="rgb(232,177,67)" rx="2"/></g>
+<g><title>runtime.mallocgcSmallScanNoHeader (0.02s, 0.53%)</title><rect x="1099.2" y="195" width="6.3" height="16" fill="rgb(250,95,85)" rx="2"/></g>
+<g><title>runtime.heapSetTypeNoHeader (0.01s, 0.27%)</title><rect x="1099.2" y="178" width="3.1" height="16" fill="rgb(240,185,75)" rx="2"/></g>
+<g><title>runtime.(*mspan).writeHeapBitsSmall (0.01s, 0.27%)</title><rect x="1099.2" y="161" width="3.1" height="16" fill="rgb(230,95,65)" rx="2"/></g>
+<g><title>runtime.profilealloc (0.01s, 0.27%)</title><rect x="1102.4" y="178" width="3.1" height="16" fill="rgb(212,117,47)" rx="2"/></g>
+<g><title>runtime.mProf_Malloc (0.01s, 0.27%)</title><rect x="1102.4" y="161" width="3.1" height="16" fill="rgb(221,126,56)" rx="2"/></g>
+<g><title>runtime.stkbucket (0.01s, 0.27%)</title><rect x="1102.4" y="144" width="3.1" height="16" fill="rgb(214,139,49)" rx="2"/></g>
+<g><title>internal/runtime/atomic.(*UnsafePointer).Load (0.01s, 0.27%)</title><rect x="1102.4" y="127" width="3.1" height="16" fill="rgb(206,101,41)" rx="2"/></g>
+<g><title>runtime.newobject (0.01s, 0.27%)</title><rect x="1105.5" y="246" width="3.1" height="16" fill="rgb(233,148,68)" rx="2"/></g>
+<g><title>runtime.mallocgc (0.01s, 0.27%)</title><rect x="1105.5" y="229" width="3.1" height="16" fill="rgb(232,177,67)" rx="2"/></g>
+<g><title>runtime.mallocgcSmallScanNoHeader (0.01s, 0.27%)</title><rect x="1105.5" y="212" width="3.1" height="16" fill="rgb(250,95,85)" rx="2"/></g>
+<g><title>runtime.memclrNoHeapPointers (0.01s, 0.27%)</title><rect x="1105.5" y="195" width="3.1" height="16" fill="rgb(247,172,82)" rx="2"/></g>
+<g><title>github.com/AaronRaj06/portcullis/internal/proxy.requestID (0.13s, 3.45%)</title><rect x="1108.6" y="263" width="40.7" height="16" fill="rgb(91,151,221)" rx="2"/><text x="1111.6" y="275">git..</text></g>
+<g><title>crypto/rand.Read (0.12s, 3.18%)</title><rect x="1108.6" y="246" width="37.6" height="16" fill="rgb(213,148,48)" rx="2"/><text x="1111.6" y="258">cry..</text></g>
+<g><title>crypto/internal/fips140/drbg.Read (0.12s, 3.18%)</title><rect x="1108.6" y="229" width="37.6" height="16" fill="rgb(217,122,52)" rx="2"/><text x="1111.6" y="241">cry..</text></g>
+<g><title>crypto/internal/sysrand.Read (0.12s, 3.18%)</title><rect x="1108.6" y="212" width="37.6" height="16" fill="rgb(222,177,57)" rx="2"/><text x="1111.6" y="224">cry..</text></g>
+<g><title>crypto/internal/sysrand.read (0.12s, 3.18%)</title><rect x="1108.6" y="195" width="37.6" height="16" fill="rgb(210,185,45)" rx="2"/><text x="1111.6" y="207">cry..</text></g>
+<g><title>internal/syscall/unix.ARC4Random (0.12s, 3.18%)</title><rect x="1108.6" y="178" width="37.6" height="16" fill="rgb(231,106,66)" rx="2"/><text x="1111.6" y="190">int..</text></g>
+<g><title>syscall.syscall (0.11s, 2.92%)</title><rect x="1108.6" y="161" width="34.4" height="16" fill="rgb(232,97,67)" rx="2"/><text x="1111.6" y="173">sy..</text></g>
+<g><title>syscall.syscalln (0.11s, 2.92%)</title><rect x="1108.6" y="144" width="34.4" height="16" fill="rgb(246,181,81)" rx="2"/><text x="1111.6" y="156">sy..</text></g>
+<g><title>syscall.rawsyscalln (0.11s, 2.92%)</title><rect x="1108.6" y="127" width="34.4" height="16" fill="rgb(220,195,55)" rx="2"/><text x="1111.6" y="139">sy..</text></g>
+<g><title>encoding/hex.EncodeToString (0.01s, 0.27%)</title><rect x="1146.2" y="246" width="3.1" height="16" fill="rgb(235,110,70)" rx="2"/></g>
+<g><title>runtime.slicebytetostring (0.01s, 0.27%)</title><rect x="1146.2" y="229" width="3.1" height="16" fill="rgb(242,117,77)" rx="2"/></g>
+<g><title>runtime.mallocgc (0.01s, 0.27%)</title><rect x="1146.2" y="212" width="3.1" height="16" fill="rgb(232,177,67)" rx="2"/></g>
+<g><title>runtime.mallocgcSmallNoScanSC4 (0.01s, 0.27%)</title><rect x="1146.2" y="195" width="3.1" height="16" fill="rgb(231,136,66)" rx="2"/></g>
+<g><title>runtime.profilealloc (0.01s, 0.27%)</title><rect x="1146.2" y="178" width="3.1" height="16" fill="rgb(212,117,47)" rx="2"/></g>
+<g><title>runtime.mProf_Malloc (0.01s, 0.27%)</title><rect x="1146.2" y="161" width="3.1" height="16" fill="rgb(221,126,56)" rx="2"/></g>
+<g><title>runtime.stkbucket (0.01s, 0.27%)</title><rect x="1146.2" y="144" width="3.1" height="16" fill="rgb(214,139,49)" rx="2"/></g>
+<g><title>internal/runtime/atomic.(*UnsafePointer).Load (0.01s, 0.27%)</title><rect x="1146.2" y="127" width="3.1" height="16" fill="rgb(206,101,41)" rx="2"/></g>
+<g><title>github.com/AaronRaj06/portcullis/internal/proxy.staticTransport.RoundTrip (0.06s, 1.59%)</title><rect x="1149.3" y="263" width="18.8" height="16" fill="rgb(117,157,237)" rx="2"/></g>
+<g><title>runtime.mapassign_faststr (0.01s, 0.27%)</title><rect x="1149.3" y="246" width="3.1" height="16" fill="rgb(251,136,86)" rx="2"/></g>
+<g><title>internal/runtime/maps.(*Map).growToSmall (0.01s, 0.27%)</title><rect x="1149.3" y="229" width="3.1" height="16" fill="rgb(218,123,53)" rx="2"/></g>
+<g><title>internal/runtime/maps.newGroups (0.01s, 0.27%)</title><rect x="1149.3" y="212" width="3.1" height="16" fill="rgb(230,175,65)" rx="2"/></g>
+<g><title>internal/runtime/maps.newarray (0.01s, 0.27%)</title><rect x="1149.3" y="195" width="3.1" height="16" fill="rgb(245,100,80)" rx="2"/></g>
+<g><title>runtime.newarray (0.01s, 0.27%)</title><rect x="1149.3" y="178" width="3.1" height="16" fill="rgb(241,116,76)" rx="2"/></g>
+<g><title>runtime.mallocgc (0.01s, 0.27%)</title><rect x="1149.3" y="161" width="3.1" height="16" fill="rgb(232,177,67)" rx="2"/></g>
+<g><title>runtime.mallocgcSmallScanNoHeader (0.01s, 0.27%)</title><rect x="1149.3" y="144" width="3.1" height="16" fill="rgb(250,95,85)" rx="2"/></g>
+<g><title>runtime.gcStart (0.01s, 0.27%)</title><rect x="1149.3" y="127" width="3.1" height="16" fill="rgb(208,163,43)" rx="2"/></g>
+<g><title>runtime.nanotime (0.01s, 0.27%)</title><rect x="1149.3" y="110" width="3.1" height="16" fill="rgb(247,132,82)" rx="2"/></g>
+<g><title>runtime.nanotime1 (0.01s, 0.27%)</title><rect x="1149.3" y="93" width="3.1" height="16" fill="rgb(224,159,59)" rx="2"/></g>
+<g><title>runtime.newobject (0.04s, 1.06%)</title><rect x="1152.4" y="246" width="12.5" height="16" fill="rgb(233,148,68)" rx="2"/></g>
+<g><title>runtime.mallocgc (0.04s, 1.06%)</title><rect x="1152.4" y="229" width="12.5" height="16" fill="rgb(232,177,67)" rx="2"/></g>
+<g><title>runtime.mallocgcSmallScanNoHeader (0.04s, 1.06%)</title><rect x="1152.4" y="212" width="12.5" height="16" fill="rgb(250,95,85)" rx="2"/></g>
+<g><title>runtime.(*mcache).nextFree (0.01s, 0.27%)</title><rect x="1152.4" y="195" width="3.1" height="16" fill="rgb(253,118,88)" rx="2"/></g>
+<g><title>runtime.(*mcache).refill (0.01s, 0.27%)</title><rect x="1152.4" y="178" width="3.1" height="16" fill="rgb(242,97,77)" rx="2"/></g>
+<g><title>runtime.(*mcentral).cacheSpan (0.01s, 0.27%)</title><rect x="1152.4" y="161" width="3.1" height="16" fill="rgb(239,144,74)" rx="2"/></g>
+<g><title>runtime.(*mcentral).grow (0.01s, 0.27%)</title><rect x="1152.4" y="144" width="3.1" height="16" fill="rgb(210,165,45)" rx="2"/></g>
+<g><title>runtime.(*mheap).alloc (0.01s, 0.27%)</title><rect x="1152.4" y="127" width="3.1" height="16" fill="rgb(213,138,48)" rx="2"/></g>
+<g><title>runtime.systemstack (0.01s, 0.27%)</title><rect x="1152.4" y="110" width="3.1" height="16" fill="rgb(223,158,58)" rx="2"/></g>
+<g><title>runtime.(*mheap).alloc.func1 (0.01s, 0.27%)</title><rect x="1152.4" y="93" width="3.1" height="16" fill="rgb(236,161,71)" rx="2"/></g>
+<g><title>runtime.(*mheap).allocSpan (0.01s, 0.27%)</title><rect x="1152.4" y="76" width="3.1" height="16" fill="rgb(243,138,78)" rx="2"/></g>
+<g><title>runtime.(*mheap).initSpan (0.01s, 0.27%)</title><rect x="1152.4" y="59" width="3.1" height="16" fill="rgb(254,139,89)" rx="2"/></g>
+<g><title>runtime.(*mspan).init (0.01s, 0.27%)</title><rect x="1152.4" y="42" width="3.1" height="16" fill="rgb(224,89,59)" rx="2"/></g>
+<g><title>runtime.memclrNoHeapPointers (0.02s, 0.53%)</title><rect x="1155.6" y="195" width="6.3" height="16" fill="rgb(247,172,82)" rx="2"/></g>
+<g><title>runtime.profilealloc (0.01s, 0.27%)</title><rect x="1161.8" y="195" width="3.1" height="16" fill="rgb(212,117,47)" rx="2"/></g>
+<g><title>runtime.mProf_Malloc (0.01s, 0.27%)</title><rect x="1161.8" y="178" width="3.1" height="16" fill="rgb(221,126,56)" rx="2"/></g>
+<g><title>runtime.stkbucket (0.01s, 0.27%)</title><rect x="1161.8" y="161" width="3.1" height="16" fill="rgb(214,139,49)" rx="2"/></g>
+<g><title>internal/runtime/atomic.(*UnsafePointer).Load (0.01s, 0.27%)</title><rect x="1161.8" y="144" width="3.1" height="16" fill="rgb(206,101,41)" rx="2"/></g>
+<g><title>strings.NewReader (0.01s, 0.27%)</title><rect x="1165.0" y="246" width="3.1" height="16" fill="rgb(205,170,40)" rx="2"/></g>
+<g><title>runtime.mallocgcSmallScanNoHeaderSC4 (0.01s, 0.27%)</title><rect x="1165.0" y="229" width="3.1" height="16" fill="rgb(230,115,65)" rx="2"/></g>
+<g><title>runtime.profilealloc (0.01s, 0.27%)</title><rect x="1165.0" y="212" width="3.1" height="16" fill="rgb(212,117,47)" rx="2"/></g>
+<g><title>runtime.mProf_Malloc (0.01s, 0.27%)</title><rect x="1165.0" y="195" width="3.1" height="16" fill="rgb(221,126,56)" rx="2"/></g>
+<g><title>runtime.stkbucket (0.01s, 0.27%)</title><rect x="1165.0" y="178" width="3.1" height="16" fill="rgb(214,139,49)" rx="2"/></g>
+<g><title>internal/runtime/atomic.(*UnsafePointer).Load (0.01s, 0.27%)</title><rect x="1165.0" y="161" width="3.1" height="16" fill="rgb(206,101,41)" rx="2"/></g>
+<g><title>net/netip.Addr.String (0.02s, 0.53%)</title><rect x="1168.1" y="263" width="6.3" height="16" fill="rgb(212,117,47)" rx="2"/></g>
+<g><title>net/netip.Addr.appendTo4 (0.01s, 0.27%)</title><rect x="1168.1" y="246" width="3.1" height="16" fill="rgb(244,139,79)" rx="2"/></g>
+<g><title>net/netip.appendDecimal (0.01s, 0.27%)</title><rect x="1168.1" y="229" width="3.1" height="16" fill="rgb(245,120,80)" rx="2"/></g>
+<g><title>runtime.slicebytetostring (0.01s, 0.27%)</title><rect x="1171.2" y="246" width="3.1" height="16" fill="rgb(242,117,77)" rx="2"/></g>
+<g><title>runtime.mallocgc (0.01s, 0.27%)</title><rect x="1171.2" y="229" width="3.1" height="16" fill="rgb(232,177,67)" rx="2"/></g>
+<g><title>runtime.mallocgcTinySC2 (0.01s, 0.27%)</title><rect x="1171.2" y="212" width="3.1" height="16" fill="rgb(248,173,83)" rx="2"/></g>
+<g><title>runtime.profilealloc (0.01s, 0.27%)</title><rect x="1171.2" y="195" width="3.1" height="16" fill="rgb(212,117,47)" rx="2"/></g>
+<g><title>runtime.mProf_Malloc (0.01s, 0.27%)</title><rect x="1171.2" y="178" width="3.1" height="16" fill="rgb(221,126,56)" rx="2"/></g>
+<g><title>runtime.stkbucket (0.01s, 0.27%)</title><rect x="1171.2" y="161" width="3.1" height="16" fill="rgb(214,139,49)" rx="2"/></g>
+<g><title>internal/runtime/atomic.(*UnsafePointer).Load (0.01s, 0.27%)</title><rect x="1171.2" y="144" width="3.1" height="16" fill="rgb(206,101,41)" rx="2"/></g>
+<g><title>runtime.(*_panic).nextDefer (0.01s, 0.27%)</title><rect x="1174.4" y="263" width="3.1" height="16" fill="rgb(216,141,51)" rx="2"/></g>
+<g><title>runtime.deferproc (0.01s, 0.27%)</title><rect x="1177.5" y="263" width="3.1" height="16" fill="rgb(232,197,67)" rx="2"/></g>
+<g><title>runtime.newdefer (0.01s, 0.27%)</title><rect x="1177.5" y="246" width="3.1" height="16" fill="rgb(246,121,81)" rx="2"/></g>
+<g><title>runtime.mallocgcSmallScanNoHeaderSC2 (0.01s, 0.27%)</title><rect x="1180.6" y="263" width="3.1" height="16" fill="rgb(244,109,79)" rx="2"/></g>
+<g><title>runtime.mallocgcSmallScanNoHeaderSC4 (0.01s, 0.27%)</title><rect x="1183.7" y="263" width="3.1" height="16" fill="rgb(230,115,65)" rx="2"/></g>
+<g><title>time.Now (0.01s, 0.27%)</title><rect x="1186.9" y="263" width="3.1" height="16" fill="rgb(239,94,74)" rx="2"/></g>
+<g><title>time.runtimeNow (0.01s, 0.27%)</title><rect x="1186.9" y="246" width="3.1" height="16" fill="rgb(229,174,64)" rx="2"/></g>
+</svg>

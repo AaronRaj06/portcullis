@@ -30,3 +30,14 @@ Responses (even 502/503/504 from the backend) are never retried; they feed passi
 - Retries in practice cover refused or reset connections before the request was sent: dead pods, closed ports, and stale keep-alive connections the Transport itself doesn't already retry.
 - Only requests that may be retried pay for the trace hook (a few small allocations).
 - Tests: `TestRetriesIdempotentRequestsThatNeverReachedABackend`, `TestNoRetryForNonIdempotentRequests`, `TestNoRetryOnceRequestReachedBackend` and `TestRetryBudgetCapsAmplification` (20 requests to a dead pool make exactly 23 attempts). Each guard was mutation-tested: removing it makes its test fail.
+
+## Update (Phase 4, optimisation round 2): "nothing reached the backend" = the dial failed
+
+Rule 3 used an `httptrace.ClientTrace` `WroteHeaders` hook. That cost a request copy, a trace struct, a closure, an atomic flag and a context value for *every* retry-eligible request, which is most GETs under the default config. The rule is now: **the error is a `*net.OpError` with `Op == "dial"`**.
+
+- It is at least as strict: if the TCP connect failed, not one byte left the proxy.
+- The case the hook additionally covered was a reused keep-alive connection dying before the request was written. `net/http`'s Transport already retries that itself for idempotent requests, so we don't need to.
+- A connection that fails *after* connecting (reset mid-request, TLS failure) is not retried. That is conservative by design.
+- The first attempt now uses the request template directly; only an actual retry makes a copy.
+
+Measured on the default config (`BenchmarkHandler/metrics+retries`): 25 → 18 allocations per request in this round (35 → 18 across rounds 1–2). The same four integration tests pass, and mutation testing confirms `TestNoRetryOnceRequestReachedBackend` fails if the dial check is removed.

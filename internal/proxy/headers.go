@@ -38,6 +38,31 @@ func removeHopByHop(h http.Header) {
 	}
 }
 
+// forwardableHeaders copies h without hop-by-hop headers, in one pass and one
+// allocation (the map): value slices are shared with the inbound request,
+// which is safe because nothing writes into them. This replaced Clone followed
+// by removeHopByHop (Phase 4 round 2).
+func forwardableHeaders(h http.Header) http.Header {
+	out := make(http.Header, len(h)+4) // +4: room for the forwarding headers
+	listed := h["Connection"]
+	for k, vv := range h {
+		if isHopHeader(k) || (len(listed) > 0 && hasToken(h, "Connection", k)) {
+			continue
+		}
+		out[k] = vv
+	}
+	return out
+}
+
+func isHopHeader(k string) bool {
+	switch k {
+	case "Connection", "Proxy-Connection", "Keep-Alive", "Proxy-Authenticate",
+		"Proxy-Authorization", "Te", "Trailer", "Transfer-Encoding", "Upgrade":
+		return true
+	}
+	return false
+}
+
 // hasToken reports whether a comma-separated header (Connection, TE) contains
 // token, case-insensitively.
 func hasToken(h http.Header, name, token string) bool {
@@ -107,35 +132,69 @@ func realClient(h http.Header, peer netip.Addr, trusted []netip.Prefix) netip.Ad
 // setForwarded writes X-Forwarded-*, Via and the request ID on the outbound headers.
 // Headers the client sent are kept only if the client is a trusted proxy;
 // otherwise a client could spoof its IP to the backend.
-func setForwarded(hdr http.Header, r *http.Request, client netip.Addr, trusted bool) {
+//
+// peer is the TCP peer's address as a string. dyn is scratch space of length
+// >= 2 for the per-request values, so they share one allocation instead of
+// one []string each (a hot-path optimisation, Phase 4 round 1).
+func setForwarded(hdr http.Header, r *http.Request, peer string, trusted bool, dyn []string) {
 	if !trusted {
 		for _, k := range forwardedHeaders {
 			delete(hdr, k)
 		}
 	}
-	xff := client.String()
-	if !client.IsValid() {
-		xff = r.RemoteAddr
-	}
+	xff := peer
 	if prior := hdr["X-Forwarded-For"]; len(prior) > 0 {
 		xff = strings.Join(prior, ", ") + ", " + xff
 	}
-	hdr.Set("X-Forwarded-For", xff)
-	if hdr.Get("X-Forwarded-Proto") == "" {
-		proto := "http"
+	dyn[0] = xff
+	hdr["X-Forwarded-For"] = dyn[0:1:1]
+	if len(hdr["X-Forwarded-Proto"]) == 0 {
 		if r.TLS != nil {
-			proto = "https"
+			hdr["X-Forwarded-Proto"] = protoHTTPS
+		} else {
+			hdr["X-Forwarded-Proto"] = protoHTTP
 		}
-		hdr.Set("X-Forwarded-Proto", proto)
 	}
-	if hdr.Get("X-Forwarded-Host") == "" {
-		hdr.Set("X-Forwarded-Host", r.Host)
+	if len(hdr["X-Forwarded-Host"]) == 0 {
+		dyn[1] = r.Host
+		hdr["X-Forwarded-Host"] = dyn[1:2:2]
 	}
-	hdr.Add("Via", via(r.ProtoMajor, r.ProtoMinor))
+	addVia(hdr, r.ProtoMajor, r.ProtoMinor)
 }
+
+// Shared read-only header values. Each has cap == len, so an append by anyone
+// copies instead of writing into the shared array. Nothing assigns into them.
+var (
+	protoHTTP  = []string{"http"}[:1:1]
+	protoHTTPS = []string{"https"}[:1:1]
+	emptyValue = []string{""}[:1:1]
+	via10      = []string{"1.0 portcullis"}[:1:1]
+	via11      = []string{"1.1 portcullis"}[:1:1]
+	via20      = []string{"2.0 portcullis"}[:1:1]
+)
 
 func via(major, minor int) string {
 	return strconv.Itoa(major) + "." + strconv.Itoa(minor) + " portcullis"
+}
+
+// addVia appends our Via entry, using a shared constant when it is the only one.
+func addVia(h http.Header, major, minor int) {
+	var v []string
+	switch {
+	case major == 1 && minor == 1:
+		v = via11
+	case major == 2:
+		v = via20
+	case major == 1 && minor == 0:
+		v = via10
+	default:
+		v = []string{via(major, minor)}
+	}
+	if prior := h["Via"]; len(prior) > 0 {
+		h["Via"] = append(prior[:len(prior):len(prior)], v[0])
+		return
+	}
+	h["Via"] = v
 }
 
 // requestID keeps a trusted caller's ID if it is well-formed, else makes a new one.

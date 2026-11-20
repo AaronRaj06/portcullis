@@ -104,3 +104,46 @@ func TestRealClient(t *testing.T) {
 		}
 	}
 }
+
+// Shared constant header values must never be written through.
+func TestAddViaNeverMutatesSharedValues(t *testing.T) {
+	h := http.Header{}
+	addVia(h, 1, 1)
+	addVia(h, 2, 0) // appends to a header currently holding the shared via11 slice
+	if got := h["Via"]; len(got) != 2 || got[0] != "1.1 portcullis" || got[1] != "2.0 portcullis" {
+		t.Fatalf("Via = %q", got)
+	}
+	if len(via11) != 1 || via11[0] != "1.1 portcullis" || len(via20) != 1 {
+		t.Fatalf("shared values were modified: %q %q", via11, via20)
+	}
+	h2 := http.Header{"Via": {"1.0 upstream-lb"}}
+	addVia(h2, 1, 0)
+	if got := h2["Via"]; len(got) != 2 || got[1] != "1.0 portcullis" {
+		t.Fatalf("Via with a prior hop = %q", got)
+	}
+}
+
+func TestForwardableHeaders(t *testing.T) {
+	in := http.Header{
+		"Connection":          {"X-Drop, keep-alive"},
+		"X-Drop":              {"1"},
+		"Keep-Alive":          {"timeout=5"},
+		"Proxy-Authorization": {"secret"},
+		"Te":                  {"trailers"},
+		"X-Keep":              {"yes"},
+		"Accept":              {"a", "b"},
+	}
+	out := forwardableHeaders(in)
+	if len(out) != 2 || out.Get("X-Keep") != "yes" || len(out["Accept"]) != 2 {
+		t.Fatalf("forwardable = %v", out)
+	}
+	if len(in) != 7 {
+		t.Fatal("input header was modified")
+	}
+	// The switch in isHopHeader and the hopHeaders list must agree.
+	for _, k := range hopHeaders {
+		if !isHopHeader(k) {
+			t.Errorf("isHopHeader(%q) = false, but it is in hopHeaders", k)
+		}
+	}
+}

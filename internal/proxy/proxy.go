@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"net/http/httptrace"
 	"net/netip"
 	"net/url"
 	"strings"
@@ -92,10 +91,17 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		trustedNets = snap.TrustedProxies
 	}
 	peer := clientAddr(r.RemoteAddr)
+	peerStr := r.RemoteAddr
+	if peer.IsValid() {
+		peerStr = peer.String()
+	}
 	trusted := isTrusted(peer, trustedNets)
 	// The original client: the peer itself, or behind trusted proxies the first
 	// untrusted address in X-Forwarded-For. Used for hashing and logs.
-	client := realClient(r.Header, peer, trustedNets).String()
+	client := peerStr
+	if c := realClient(r.Header, peer, trustedNets); c != peer {
+		client = c.String()
+	}
 	rid := requestID(r.Header.Get(HeaderRequestID), trusted)
 	rc := http.NewResponseController(w)
 
@@ -109,8 +115,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if h.o.Metrics != nil {
 			h.o.Metrics.Done(st.route, r.Method, st.status, st.errKind, d)
 		}
+		if !h.o.Logger.Enabled(context.Background(), slog.LevelInfo) {
+			return // building the attributes allocates; skip it when access logs are off
+		}
 		h.o.Logger.LogAttrs(context.Background(), slog.LevelInfo, "request",
-			slog.String("request_id", rid), slog.String("client", client), slog.String("peer", peer.String()),
+			slog.String("request_id", rid), slog.String("client", client), slog.String("peer", peerStr),
 			slog.String("method", r.Method), slog.String("host", r.Host), slog.String("path", r.URL.Path),
 			slog.String("route", st.route), slog.String("pool", st.pool), slog.String("backend", st.backend),
 			slog.Int("attempts", st.attempts), slog.Bool("panic", st.panicked),
@@ -153,7 +162,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if extended {
 		upgrade = "websocket"
 	}
-	tmpl, body := h.outbound(w, r, rc, peer, trusted, rid, upgrade)
+	tmpl, body, ridVal := h.outbound(w, r, rc, peerStr, trusted, rid, upgrade)
 	var wsKey string
 	if extended {
 		wsKey = toHTTP1WebSocket(tmpl)
@@ -165,6 +174,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	// Only requests that may be retried pay for the write tracing.
 	retryable := pool.Retries > 0 && pool.Budget != nil && idempotent(r.Method)
+	out := tmpl
 
 	var triedBuf [4]*lb.Backend
 	tried := triedBuf[:0]
@@ -185,7 +195,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		st.backend = b.Addr
 		st.attempts++
-		out, wrote := forBackend(tmpl, pool.Scheme, b, retryable)
+		if st.attempts > 1 {
+			out = retryCopy(tmpl) // rare: only after a failed dial
+		}
+		out.URL.Scheme, out.URL.Host = pool.Scheme, b.Addr
 
 		b.Acquire()
 		resp, err := transport.RoundTrip(out)
@@ -200,7 +213,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				}
 				return
 			}
-			h.serveResponse(w, rc, r, resp, rid, &st)
+			h.serveResponse(w, rc, r, resp, ridVal, &st)
 			return
 		}
 		b.Release()
@@ -210,9 +223,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if upstreamFault {
 			h.report(pool, b, true, st.errKind)
 		}
-		// Retry only if: the method is idempotent, nothing reached the backend (no
-		// headers written, no body read), attempts remain, and the budget allows it.
-		if upstreamFault && retryable && !wrote.Load() && body.untouched() &&
+		// Retry only if: the method is idempotent, nothing reached the backend
+		// (the TCP connect itself failed, and no body was read), attempts remain,
+		// and the budget allows it (ADR 0005).
+		if upstreamFault && retryable && dialFailed(err) && body.untouched() &&
 			len(tried) < pool.Retries && pool.Budget.Withdraw() {
 			tried = append(tried, b)
 			if h.o.Metrics != nil {
@@ -256,7 +270,7 @@ func idempotent(m string) bool {
 	return false
 }
 
-func (h *Handler) serveResponse(w http.ResponseWriter, rc *http.ResponseController, r *http.Request, resp *http.Response, rid string, st *reqState) {
+func (h *Handler) serveResponse(w http.ResponseWriter, rc *http.ResponseController, r *http.Request, resp *http.Response, rid []string, st *reqState) {
 	defer resp.Body.Close()
 	st.status = resp.StatusCode
 	removeHopByHop(resp.Header)
@@ -264,8 +278,8 @@ func (h *Handler) serveResponse(w http.ResponseWriter, rc *http.ResponseControll
 	for k, vv := range resp.Header {
 		hdr[k] = vv
 	}
-	hdr.Add("Via", via(resp.ProtoMajor, resp.ProtoMinor))
-	hdr.Set(HeaderRequestID, rid)
+	addVia(hdr, resp.ProtoMajor, resp.ProtoMinor)
+	hdr[HeaderRequestID] = rid // the same read-only slice sent upstream
 	h.extendWrite(rc)
 	w.WriteHeader(resp.StatusCode)
 
@@ -288,31 +302,37 @@ func (h *Handler) serveResponse(w http.ResponseWriter, rc *http.ResponseControll
 
 // outbound builds the request template shared by all attempts. It carries the
 // client's context, so a client disconnect cancels the upstream request too.
+// It also returns the request ID as a header value, shared with the response.
 func (h *Handler) outbound(w http.ResponseWriter, r *http.Request, rc *http.ResponseController,
-	client netip.Addr, trusted bool, rid, upgrade string) (*http.Request, *clientBody) {
-	hdr := r.Header.Clone()
-	te := hasToken(hdr, "Te", "trailers")
-	removeHopByHop(hdr)
-	if te {
+	peer string, trusted bool, rid, upgrade string) (*http.Request, *clientBody, []string) {
+	hdr := forwardableHeaders(r.Header)
+	if hasToken(r.Header, "Te", "trailers") {
 		hdr.Set("Te", "trailers")
 	}
 	if upgrade != "" { // Connection and Upgrade are hop-by-hop, but an upgrade must be re-requested on the next hop
 		hdr.Set("Connection", "Upgrade")
 		hdr.Set("Upgrade", upgrade)
 	}
-	setForwarded(hdr, r, client, trusted)
-	hdr.Set(HeaderRequestID, rid)
+	dyn := make([]string, 3) // XFF, X-Forwarded-Host, request ID: one allocation
+	setForwarded(hdr, r, peer, trusted, dyn)
+	dyn[2] = rid
+	ridVal := dyn[2:3:3]
+	hdr[HeaderRequestID] = ridVal
 	if _, ok := hdr["User-Agent"]; !ok {
-		hdr["User-Agent"] = []string{""} // stop net/http adding "Go-http-client/1.1"
+		hdr["User-Agent"] = emptyValue // stop net/http adding "Go-http-client/1.1"
 	}
 
-	out := &http.Request{
-		Method:        r.Method,
-		URL:           &url.URL{Path: r.URL.Path, RawPath: r.URL.RawPath, RawQuery: r.URL.RawQuery},
-		Header:        hdr,
-		Host:          r.Host,
-		ContentLength: r.ContentLength,
-	}
+	// One shallow copy of the inbound request carries its context (so a client
+	// disconnect cancels the upstream call) without a second WithContext copy.
+	// Then every server-side field a client request must not have is reset.
+	out := new(http.Request)
+	*out = *r
+	out.URL = &url.URL{Path: r.URL.Path, RawPath: r.URL.RawPath, RawQuery: r.URL.RawQuery}
+	out.Header = hdr
+	out.Body, out.GetBody = nil, nil
+	out.RequestURI, out.RemoteAddr, out.TLS = "", "", nil
+	out.Close, out.TransferEncoding, out.Trailer = false, nil, nil
+	out.Form, out.PostForm, out.MultipartForm, out.Response = nil, nil, nil, nil
 	var body *clientBody
 	if r.ContentLength != 0 { // > 0 known length, -1 chunked
 		body = &clientBody{r: r.Body, rc: rc, idle: h.o.Limits.BodyReadTimeout, want: r.ContentLength}
@@ -321,23 +341,27 @@ func (h *Handler) outbound(w http.ResponseWriter, r *http.Request, rc *http.Resp
 		}
 		out.Body = body
 	}
-	return out.WithContext(r.Context()), body
+	return out, body, ridVal
 }
 
-// forBackend points a copy of tmpl at backend b. If track is set, wrote becomes
-// true once request headers have been written to the backend; after that, a
-// retry could make the backend process the request twice.
-func forBackend(tmpl *http.Request, scheme string, b *lb.Backend, track bool) (*http.Request, *atomic.Bool) {
-	wrote := new(atomic.Bool)
-	ctx := tmpl.Context()
-	if track {
-		ctx = httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{WroteHeaders: func() { wrote.Store(true) }})
-	}
-	out := tmpl.WithContext(ctx)
+// dialFailed reports a failure to connect at all. Then nothing was sent, so
+// even a request the backend must not see twice cannot have been seen once.
+// Failures on an already open connection are excluded: the request may have
+// been written. (net/http itself retries idempotent requests on a reused
+// connection that dies before anything was written.)
+func dialFailed(err error) bool {
+	var op *net.OpError
+	return errors.As(err, &op) && op.Op == "dial"
+}
+
+// retryCopy gives a retry its own request and URL, so nothing the Transport
+// may still hold from the failed attempt is mutated.
+func retryCopy(tmpl *http.Request) *http.Request {
+	out := new(http.Request)
+	*out = *tmpl
 	u := *tmpl.URL
-	u.Scheme, u.Host = scheme, b.Addr
 	out.URL = &u
-	return out, wrote
+	return out
 }
 
 var bufPool = sync.Pool{New: func() any { b := make([]byte, 32<<10); return &b }}

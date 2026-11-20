@@ -128,7 +128,7 @@ func (h *Handler) serveUpgrade(w http.ResponseWriter, rc *http.ResponseControlle
 	removeHopByHop(resp.Header)
 	resp.Header.Set("Connection", "Upgrade")
 	resp.Header.Set("Upgrade", respType)
-	resp.Header.Add("Via", via(resp.ProtoMajor, resp.ProtoMinor))
+	addVia(resp.Header, resp.ProtoMajor, resp.ProtoMinor)
 	resp.Header.Set(HeaderRequestID, rid)
 	if _, err := brw.WriteString("HTTP/1.1 101 Switching Protocols\r\n"); err != nil {
 		return http.StatusSwitchingProtocols, "upgrade_write"
@@ -205,7 +205,7 @@ func (h *Handler) serveExtendedConnect(w http.ResponseWriter, rc *http.ResponseC
 	for k, vv := range resp.Header {
 		hdr[k] = vv // e.g. Sec-WebSocket-Protocol, Sec-WebSocket-Extensions
 	}
-	hdr.Add("Via", via(resp.ProtoMajor, resp.ProtoMinor))
+	addVia(hdr, resp.ProtoMajor, resp.ProtoMinor)
 	hdr.Set(HeaderRequestID, rid)
 	w.WriteHeader(http.StatusOK)
 	if err := rc.Flush(); err != nil {
