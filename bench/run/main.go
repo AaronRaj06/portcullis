@@ -35,6 +35,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -193,6 +194,7 @@ func main() {
 				log.Printf("%-34s %-10s run %d: %8.0f req/s  p50 %6.2fms  p99 %7.2fms  ok %.4f  cpu %5.0f%%  mem %5.1fMiB",
 					s.Name, t.name, i, r.Throughput, r.P50ms, r.P99ms, r.Success, r.CPUPct, r.MemMiB)
 				all = append(all, r)
+				h.writeJSON("results.json", all) // after every run: a crash keeps what finished
 			}
 		}
 	}
@@ -277,11 +279,16 @@ func (h *harness) attack(s scenario, t target, d time.Duration, id string) resul
 }
 
 func (h *harness) attackURL(s scenario, t target, url string, d time.Duration, id string) result {
+	h.checkDisk()
 	file := fmt.Sprintf("%s-%s-%s", s.Name, t.name, id)
 	must(os.WriteFile(filepath.Join(h.out, "raw", file+".targets"), []byte("GET "+url+"\n"), 0o600))
 	args := []string{"run", "--rm", "--user", "0", "--network", "host", "--cpuset-cpus", h.gen,
 		"-v", h.out + "/raw:/out", image, "vegeta", "attack",
 		"-targets=/out/" + file + ".targets", "-duration=" + d.String(), "-timeout=10s",
+		// Don't store response bodies: at 256 KiB per /large response vegeta's
+		// output reached gigabytes and filled the disk (it crashed Docker's VM
+		// once). Latency and status don't need the body.
+		"-max-body=0",
 		"-keepalive=" + strconv.FormatBool(s.KeepAlive), "-output=/out/" + file + ".bin"}
 	if s.Workers > 0 {
 		w := strconv.Itoa(s.Workers)
@@ -305,6 +312,21 @@ func (h *harness) attackURL(s scenario, t target, url string, d time.Duration, i
 		_ = os.Remove(bin)
 	}
 	return r
+}
+
+// minFreeDisk is the free space the harness insists on before each attack. A
+// full host disk makes Docker's VM filesystem abort its journal and go
+// read-only, which is far worse than a stopped benchmark.
+const minFreeDisk = 3 << 30
+
+func (h *harness) checkDisk() {
+	var st syscall.Statfs_t
+	if err := syscall.Statfs(h.out, &st); err != nil {
+		return
+	}
+	if free := st.Bavail * uint64(st.Bsize); free < minFreeDisk {
+		log.Fatalf("only %.1f GiB free on the results disk; stopping before Docker runs out of space", float64(free)/(1<<30))
+	}
 }
 
 // measure runs one attack while sampling the target's CPU and memory.
