@@ -4,3 +4,7 @@ bin/
 *.prof
 /bench/results/tmp/
 testdata/fuzz/**/cache/
+# Benchmark runs: commit summaries and reports, not per-request binaries or logs.
+bench/results/**/*.bin
+bench/results/**/*.log
+bench/results/*-invalid/

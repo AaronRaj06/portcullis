@@ -1,0 +1,35 @@
+# ADR 0009 evidence: Portcullis failover run 2 of the first (invalid) full benchmark, 2026-11-20
+# Per second of the attack: status/backend -> count. 503/- = 'no available backend' answered by Portcullis.
+# be2 was stopped at ~7 s and restarted at ~18 s (the harness timing bug, since fixed, shifted both by ~3 s).
+# 21-25 s: the host stalled (load average >100 from unrelated work); both health checkers timed out and marked healthy backends down.
+0 {'200/be1': 500, '200/be2': 501}
+1 {'200/be1': 476, '200/be2': 473}
+2 {'200/be1': 488, '200/be2': 491}
+3 {'200/be1': 536, '200/be2': 535}
+4 {'200/be1': 500, '200/be2': 501}
+5 {'200/be1': 500, '200/be2': 500}
+6 {'200/be1': 500, '200/be2': 500}
+7 {'200/be1': 826, '200/be2': 173}
+8 {'200/be1': 1001}
+9 {'200/be1': 1000}
+10 {'200/be1': 1000}
+11 {'200/be1': 1000}
+12 {'200/be1': 1000}
+13 {'200/be1': 1000}
+14 {'200/be1': 1000}
+15 {'200/be1': 999}
+16 {'200/be1': 1001}
+17 {'200/be1': 999}
+18 {'200/be1': 727, '200/be2': 274}
+19 {'200/be1': 275, '200/be2': 281}
+20 {'200/be1': 249, '200/be2': 264}
+21 {'200/be1': 167, '200/be2': 251, '503/-': 522}
+22 {'200/be1': 67, '200/be2': 208, '503/-': 386}
+23 {'503/-': 141}
+24 {'503/-': 738}
+25 {'200/be1': 46, '200/be2': 61, '503/-': 772}
+26 {'200/be1': 8, '200/be2': 7}
+27 {'200/be1': 1}
+28 {'200/be1': 127, '200/be2': 127}
+29 {'200/be1': 585, '200/be2': 586}
+30 {'200/be2': 1}
