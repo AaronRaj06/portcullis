@@ -2,6 +2,8 @@ module github.com/AaronRaj06/portcullis
 
 go 1.26.0
 
+toolchain go1.26.11
+
 require (
 	github.com/prometheus/client_golang v1.25.0
 	golang.org/x/net v0.59.0

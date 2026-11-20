@@ -21,3 +21,12 @@ The brief left the GitHub user as a placeholder, and asked for Go 1.23 or newer.
 ## Update (Phase 1)
 
 Adding `prometheus/client_golang v1.25.0` raised the minimum to **Go 1.26** (its own `go.mod` requires it). We accepted this rather than pinning an older client_golang with older transitive dependencies. The installed Go 1.27.4 already satisfies it, so nothing on the machine changes (ADR 0003). The Docker build stage now uses `golang:1.26`.
+
+## Update (first CI run)
+
+The first GitHub Actions run failed `govulncheck`: `setup-go` read `go 1.26.0` from `go.mod` and installed exactly 1.26.0, whose `net/http` has GO-2026-6859 (fixed in 1.26.11). Local runs on Go 1.27.4 had not shown it. Fixes:
+
+- `go.mod` now says `toolchain go1.26.11`: anyone building with an older 1.26 gets the patched toolchain automatically (into the module cache, nothing system-wide; ADR 0003).
+- CI installs `1.26.x` (newest patch) instead of reading the minimum from `go.mod`.
+
+Lesson: the `go` line is a *minimum*, and CI should test what users actually build with (the newest patch), not the floor.
