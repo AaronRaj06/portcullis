@@ -236,6 +236,25 @@ func (h *harness) sh(args ...string) {
 	}
 }
 
+// shRetry is sh for commands that may hit a transient Docker engine error
+// (the first final run died on one "500 Internal Server Error" from
+// containers/create). It retries up to 3 times, logging each failure.
+func (h *harness) shRetry(args ...string) {
+	for attempt := 1; ; attempt++ {
+		cmd := exec.Command(args[0], args[1:]...) //nolint:gosec // fixed commands built by this harness
+		cmd.Stdout, cmd.Stderr = os.Stderr, os.Stderr
+		err := cmd.Run()
+		if err == nil {
+			return
+		}
+		if attempt == 3 {
+			log.Fatalf("%s: %v (after %d attempts)", strings.Join(args, " "), err, attempt)
+		}
+		log.Printf("attempt %d failed (%v); retrying in %ds", attempt, err, attempt*5)
+		time.Sleep(time.Duration(attempt*5) * time.Second)
+	}
+}
+
 func (h *harness) output(args ...string) string {
 	b, _ := exec.Command(args[0], args[1:]...).Output() //nolint:gosec // fixed commands
 	return string(b)
@@ -306,7 +325,7 @@ func (h *harness) attackURL(s scenario, t target, url string, d time.Duration, i
 	} else {
 		args = append(args, "-rate="+strconv.Itoa(s.Rate), "-max-workers=2048")
 	}
-	h.sh(append([]string{"docker"}, args...)...)
+	h.shRetry(append([]string{"docker"}, args...)...)
 	bin := filepath.Join(h.out, "raw", file+".bin")
 	r, rawReport := report(bin)
 	r.Scenario, r.Target = s.Name, t.name
