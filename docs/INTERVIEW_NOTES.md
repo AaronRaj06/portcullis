@@ -178,3 +178,37 @@ A third issue was caught by design review before it shipped, and its regression 
 - **Go's HTTP/2 client can't send RFC 8441 requests.** `net/http` rejects `:protocol` as a header name, and recent `x/net/http2` Transports turned out to route back through `net/http`, so switching packages failed with the identical error. Reading the source (`transport.go:628`) explained it. The test now speaks raw HTTP/2 frames with `x/net`'s `Framer` and `hpack`, the same exchange a browser performs.
 - **Routing ran before the method check.** A plain `CONNECT` has no path, so it got a 404 from the router instead of a 405. The method guard now runs first.
 - **Dead code, found by mutation testing again.** Clearing the write deadline on HTTP/2 tunnels did nothing, because no deadline is ever set on that path. I deleted it; the idle-tunnel test keeps guarding the behaviour.
+
+## Phase 4: Benchmarks and optimisation
+
+### Concepts, in plain language
+
+- **Closed loop vs open loop.** A closed-loop load generator keeps N requests in flight and sends the next one only when one finishes. It measures maximum throughput. An open-loop generator sends at a fixed rate whatever happens, the way real users arrive. Only open loop shows how long requests wait when the server stalls.
+- **Coordinated omission.** In a closed loop, a server that stalls for one second also stops the generator from sending, so the second of requests that *would* have waited never gets measured, and the percentiles look far better than reality. vegeta's `-rate` mode avoids this.
+- **p50 / p95 / p99.** The latency that 50%, 95% and 99% of requests beat. The tail (p99) is what users notice and what queues amplify.
+- **CPU per 1k req/s.** The CPU used, divided by the rate served. It compares the *cost* of proxying even when the targets reach different rates, or when the load generator is the bottleneck.
+- **pprof and flame graphs.** Go's built-in sampling profiler records where CPU time and allocations go. A flame graph draws the call stacks as stacked bars: the wider the bar, the more time.
+- **Allocations and GC pressure.** Every heap allocation is work for the garbage collector later. Fewer allocations per request means less GC CPU and fewer pauses.
+
+### Trade-offs and rejected alternatives
+
+- **vegeta over wrk2.** Both avoid coordinated omission. vegeta builds with `go install` (no C toolchain), runs in a container next to the targets, and writes per-request results, which failure injection needs for per-second error counts.
+- **Pinned CPUs and host networking over the Docker bridge.** On the bridge network, every target, including the bare backend, capped at about 12–13k req/s, so the bridge was being measured, not the proxies. Each container now gets its own vCPUs (`--cpuset-cpus`), and all of them share the VM's loopback.
+- **Interleaved runs (A B C D, A B C D…) over back-to-back runs.** Host noise then lands on every target alike instead of penalising whichever ran last.
+- **Removing allocations rather than pooling them.** `sync.Pool` is used where ownership is clear: the 32 KiB body-copy buffers (`internal/proxy/proxy.go`). Header maps and requests are handed to `net/http`, which may still hold them after the handler returns, so pooling them would risk use-after-free bugs. They were made cheaper instead: a one-pass header copy and shared constant slices.
+- **Reporting CPU per request instead of only req/s,** because the generator, not the proxy, set the throughput ceiling.
+
+### Likely interview questions
+
+1. **How does Portcullis compare with NGINX?** Honestly: NGINX wins on CPU (22–31% less per request), on tail latency (p99 under 1 ms vs 1.5–8.7 ms) and on memory (5 vs 13–35 MiB). Portcullis beats Go's own `httputil.ReverseProxy` by 6–12% in CPU per request with the same transport settings, while doing routing, health tracking, retries and metrics on top. All figures are from `bench/results/2026-11-20`.
+2. **What did profiling show, and what did you change?** 67% of end-to-end CPU is `read`/`write` system calls, and the proxy handler is about 1.3%. Two rounds cut handler allocations from 31 to 17 and ns/op by 27%: a one-pass hop-by-hop header filter instead of clone-then-delete, shared constant header slices, one backing array for per-request headers, and copying the request only for actual retries.
+3. **How do you avoid fooling yourself with benchmarks?** Open-loop latency, 5 interleaved runs with medians *and* min–max spread, pinned CPUs, the same transport settings for the Go baseline, every raw report committed, and host load recorded per run. That last one is what showed this run's latency numbers were unusable, and the doc says so instead of quoting them.
+4. **What happens when a backend dies under load?** 0 failed requests out of about 90k across 3 runs. The first dial failure ejects the backend passively, the idempotent request retries on the other backend, and the active health check re-admits it within 240–464 ms of its return (NGINX: 1.2–1.8 s).
+5. **Why is panic mode on by default?** Under a CPU stall, every health check times out together and every healthy backend gets marked down. Without panic mode, that run returned 10.3% 503s. With panic mode, a pool where every backend looks down sends traffic to all of them instead of to none (ADR 0009).
+
+### What went wrong
+
+- **The first benchmarks measured Docker, not the proxies.** The bare backend was as slow as the proxies on the bridge network. Fixed with host networking on the VM loopback.
+- **The benchmark filled the disk and broke Docker.** Storing every response body produced gigabytes, the VM's ext4 volume remounted read-only, and Docker would not start. The harness now never stores bodies, stops below 3 GiB free, and saves results after every run.
+- **A real bug found by a benchmark:** correlated health-check false positives (see question 5), now ADR 0009.
+- **The final run was on a busy machine.** Recording host load per run turned "the numbers look odd" into evidence. Even NGINX's p99 swung from 1.5 to 422 ms. Only the comparisons that held up are quoted, and the keep-alive-off hang is recorded as an open harness defect in the roadmap.

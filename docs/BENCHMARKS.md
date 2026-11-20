@@ -80,3 +80,65 @@ Proxy handler only, before and after (`flame-cpu-handler-round0.svg`, `flame-cpu
 ![handler after](../bench/results/profiles/flame-cpu-handler-round2.svg)
 
 Flame graphs are rendered by `bench/flame` from `go tool pprof -traces` (no graphviz needed): `go tool pprof -traces BIN PROFILE | go run ./bench/flame -title T > out.svg`.
+
+## Load-test results (run of 2026-11-20)
+
+Raw data: [`bench/results/2026-11-20/`](../bench/results/2026-11-20/) (commit `b2fab26`; full table in `summary.md`, every run in `results.json`, vegeta reports in `raw/`).
+
+**Read this first: the host was busy.** Other applications were running during this run, and the Mac's 1-minute load average (recorded per run as `host_load1`) was between **3.3 and 65** on 8 cores, with a median of 7.7. The harness waits for a quiet host before it starts but cannot pause mid-run. So:
+
+- **Keep-alive throughput (load 4.7–9.1)** is usable. All four targets ran interleaved under the same conditions, and the spreads are tight. These are the numbers below.
+- **Open-loop latency (load 6.8–49.6)** is **not usable**. Tails jump between runs for *every* target: NGINX's p99 at 4,000 req/s ranges from 1.5 ms to 422 ms. These rows are in `summary.md` but are not quoted here.
+- **Keep-alive off** hit a harness defect (see Limitations) and is not usable either.
+- **Failure injection** measures errors and timings of seconds, not milliseconds, so it holds up under noise.
+
+Earlier attempts that day were discarded and not committed: the Docker VM's disk filled up, and later a Docker engine 500 aborted a run. The harness now stops below 3 GiB of free disk and retries transient engine errors.
+
+### Throughput, keep-alive on, `GET /small` (median of 5, min–max)
+
+| Concurrency | Target | req/s | p99 ms | CPU %/1k req/s | Peak memory |
+|---|---|--:|--:|--:|--:|
+| 16 | direct | 12,697 (12,018–13,171) | 0.33 | 5.7 | 12 MiB |
+| 16 | **portcullis** | **10,079** (9,308–10,462) | 1.51 | **7.6** | 13 MiB |
+| 16 | httputil | 9,829 (8,759–10,636) | 1.50 | 8.1 | 12 MiB |
+| 16 | nginx | 10,374 (9,279–11,077) | 0.65 | 5.9 | 5 MiB |
+| 64 | direct | 12,267 | 0.39 | 6.0 | 16 MiB |
+| 64 | **portcullis** | **9,529** | 2.61 | **8.2** | 13 MiB |
+| 64 | httputil | 9,609 | 2.80 | 9.1 | 17 MiB |
+| 64 | nginx | 10,596 | 0.72 | 5.7 | 5 MiB |
+| 256 | direct | 13,049 | 0.54 | 5.7 | 39 MiB |
+| 256 | **portcullis** | **9,756** | 8.70 | **8.1** | 35 MiB |
+| 256 | httputil | 9,613 | 20.78 | 9.2 | 35 MiB |
+| 256 | nginx | 10,384 | 0.90 | 5.6 | 6 MiB |
+
+What this shows:
+
+- **The load generator is the ceiling, not the proxies.** The bare backend tops out at about 12–13k req/s at every concurrency, and the three proxies all land within about 10% of each other, at 75–80% of direct. So raw req/s here mostly measures vegeta on 3 vCPUs. **CPU per 1k req/s** is the fairer comparison, because it is the cost of proxying whatever rate was achieved.
+- **Portcullis vs `httputil.ReverseProxy`:** about **6–12% less CPU per request**, with the same throughput, and a lower p99 at 256 connections (8.7 vs 20.8 ms). Both use the same `http.Transport` settings, so the difference is the handler work from the optimisation rounds above, even though Portcullis also does routing, health state, retries and metrics.
+- **Where NGINX wins (clearly):**
+  - **CPU:** NGINX needs **22–31% less CPU per request** than Portcullis (5.6–5.9 vs 7.6–8.2).
+  - **Tail latency:** NGINX's p99 stays under 1 ms at every concurrency. Portcullis goes from 1.5 ms to 8.7 ms as connections grow. One core shared by hundreds of goroutines, the Go scheduler and the garbage collector costs tail latency that an event loop in C does not pay.
+  - **Memory:** NGINX uses about 5 MiB against 13–35 MiB for Portcullis.
+
+  Matching NGINX was never the goal. Portcullis is a few thousand lines of Go with hand-written load balancing, and every piece of it can be explained.
+
+`/large` (256 KiB) throughput ran at load averages up to 60 and has 2–10× min–max spreads, so it is not compared here.
+
+### Failure injection (3 runs each, 1,000 req/s, one of two backends dies at t = 10 s and comes back at t = 20 s)
+
+| Target | Failed requests | Re-admission after the backend returns |
+|---|--:|--:|
+| **portcullis** | **0 / 89,990** in all 3 runs | **240–464 ms** |
+| nginx | 0 / 90,000 in all 3 runs | 1,209–1,825 ms |
+
+- Neither proxy dropped a request. Portcullis retries an idempotent request on another backend when the dial fails (ADR 0005), and NGINX's `proxy_next_upstream error` does the same.
+- Portcullis takes the backend back sooner, because its active health check runs every second, while NGINX waits out `fail_timeout`.
+- An earlier run at the same settings, with panic mode *off*, returned **10.3% errors** (2,559 of 24,871), all `503 no available backend`, for about 5 seconds. The host stalled (load above 100), both health checkers timed out together, and they marked *both* healthy backends down. That evidence led to ADR 0009 (panic mode on by default). The log is in `bench/results/evidence/adr-0009-failover-run.txt`.
+
+## Limitations
+
+- **One laptop, everything on it.** The load generator, proxies and backends share one Docker VM on one M1. Pinning to separate vCPUs prevents direct sharing, but macOS still schedules those vCPUs alongside everything else on the Mac. This run was made on a busy host (see above). A clean re-run needs a quiet machine: `make bench`, then check the `host load (max)` column that `summary.md` now includes.
+- **Keep-alive-off runs are broken by a harness defect, not yet fixed.** In those runs, every vegeta worker had exactly one request that hung until the 10 s client timeout. The pattern was the same for direct, Portcullis, `httputil` and NGINX, but it hit different targets in different runs, which points at the VM's TCP stack rather than at any proxy. The suspected cause is socket state left by tens of thousands of short-lived loopback connections between interleaved targets. TIME_WAIT is only drained between *scenarios*, not between targets. Recorded in `docs/ROADMAP.md`.
+- **The generator caps throughput** at about 13k req/s, so the maximum throughput of a single proxy core is not measured. CPU per request is.
+- **Loopback only.** No real network latency or packet loss, and no TLS in these runs.
+- **10-second runs.** Long enough for stable medians on a quiet host. Too short to show slow leaks or GC behaviour over minutes.

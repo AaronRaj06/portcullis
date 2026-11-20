@@ -35,6 +35,12 @@ What is deferred, and why. Anything not finished is listed here, never presented
 | WebSockets from HTTP/2 clients got 502 | RFC 8441 translation (ADR 0008) |
 | CI never ran on GitHub | private repo created; push blocked until the `gh` token has the `workflow` scope |
 
+## Deferred from Phase 4
+
+- **A clean benchmark run.** The committed run (`bench/results/2026-11-20`) ran on a busy host (load average 3–65 on 8 cores). Keep-alive throughput and failure injection are usable; open-loop latency is not. Re-run `make bench` on a quiet machine and check the `host load (max)` column in `summary.md`.
+- **Keep-alive-off hang in the harness.** Each vegeta worker hits exactly one 10 s timeout per run, against every target including the bare backend. The suspected cause is VM socket state between interleaved targets, but it has not been diagnosed. Next step: drain TIME_WAIT between targets (not only between scenarios) and compare `nstat` ListenDrops before and after.
+- **Portcullis tail latency under contention** (p99 8.7 ms vs NGINX 0.9 ms at 256 connections on one core). Worth a profile on a quiet host: scheduler and GC settings (`GOGC`, `GOMEMLIMIT`), and per-connection goroutine costs.
+
 ## By design (not planned)
 
 - **Listeners and server timeouts need a restart** (ADR 0007). Changing a listen address means rebinding a socket; the server-level timeouts are fixed when `http.Server` is built. Everything that changes routing is live, and so is the TLS certificate.

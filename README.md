@@ -6,7 +6,9 @@ A small, production-minded application delivery and security stack in Go:
 - **PolicyScript**: a small, safe rule language the proxy runs on every request and response, inspired by F5 iRules.
 - **`portcullis-controller`**: a Kubernetes controller that reads Gateway API resources and programs the data plane (the *control plane*).
 
-> **Status: Phase 3 (config and hot reload).** Traffic config from YAML/JSON, swapped atomically via SIGHUP or the admin API with zero failed requests across 100 reloads under load.
+> **Status: Phase 4 (benchmarks and optimisation).** `make bench` compares Portcullis with the bare backend, Go's `httputil.ReverseProxy` and NGINX, using vegeta in pinned containers. With keep-alive, Portcullis uses 6–12% less CPU per request than `httputil` and 22–31% more than NGINX. When a backend dies under load it fails no requests, and it re-admits the backend in under 0.5 s. Handler allocations are down from 31 to 17 per request. See [docs/BENCHMARKS.md](docs/BENCHMARKS.md), including the limitations.
+>
+> Phase 3: traffic config from YAML/JSON, swapped atomically via SIGHUP or the admin API, with zero failed requests across 100 reloads under load.
 >
 > Earlier phases: Reverse proxy with Gateway-API-style routing, five hand-written load balancers, weighted canary splits, active and passive health checks (with back-off and optional panic mode), safe retries with a budget, WebSockets, HTTP/2 and h2c upstreams, TLS, graceful shutdown, request IDs and metrics. See [docs/PLAN.md](docs/PLAN.md) and [docs/ROADMAP.md](docs/ROADMAP.md).
 
@@ -30,6 +32,7 @@ make vuln      # govulncheck
 make fuzz      # short fuzz smoke run (FUZZTIME=10s)
 make docker    # distroless, non-root images
 make tools     # project-local kind + vegeta
+make bench     # full load-test matrix in Docker (about an hour; needs a quiet machine)
 ```
 
 ## Layout

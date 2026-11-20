@@ -550,7 +550,7 @@ func (h *harness) summarise(scenarios []scenario, all []result) {
 	}
 	var csv, md bytes.Buffer
 	csv.WriteString("scenario,target,runs,throughput_rps,throughput_min,throughput_max,success,p50_ms,p95_ms,p99_ms,p99_min,p99_max,max_ms,cpu_pct,cpu_pct_per_1k_rps,mem_mib\n")
-	md.WriteString("| scenario | target | req/s (min–max) | success | p50 ms | p95 ms | p99 ms (min–max) | CPU % | CPU %/1k req/s | mem MiB |\n|---|---|--:|--:|--:|--:|--:|--:|--:|--:|\n")
+	md.WriteString("| scenario | target | req/s (min–max) | success | p50 ms | p95 ms | p99 ms (min–max) | CPU % | CPU %/1k req/s | mem MiB | host load (max) |\n|---|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|\n")
 	var summary []result
 	for _, s := range scenarios {
 		for _, t := range targets {
@@ -573,14 +573,15 @@ func (h *harness) summarise(scenarios []scenario, all []result) {
 			summary = append(summary, m)
 			lo, hi := spread(rs, func(r result) float64 { return r.Throughput })
 			p99lo, p99hi := spread(rs, func(r result) float64 { return r.P99ms })
-			perK := 0.0 // CPU cost: % of one core per 1000 req/s served
+			_, loadHi := spread(rs, func(r result) float64 { return r.HostLoad1 }) // above ~4 on this 8-core Mac the runs are noise
+			perK := 0.0                                                            // CPU cost: % of one core per 1000 req/s served
 			if m.Throughput > 0 {
 				perK = m.CPUPct / (m.Throughput / 1000)
 			}
 			fmt.Fprintf(&csv, "%s,%s,%d,%.0f,%.0f,%.0f,%.4f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.0f,%.2f,%.1f\n", m.Scenario, m.Target, m.Run,
 				m.Throughput, lo, hi, m.Success, m.P50ms, m.P95ms, m.P99ms, p99lo, p99hi, m.MaxMs, m.CPUPct, perK, m.MemMiB)
-			fmt.Fprintf(&md, "| %s | %s | %.0f (%.0f–%.0f) | %.4f | %.2f | %.2f | %.2f (%.2f–%.2f) | %.0f | %.1f | %.1f |\n", m.Scenario, m.Target,
-				m.Throughput, lo, hi, m.Success, m.P50ms, m.P95ms, m.P99ms, p99lo, p99hi, m.CPUPct, perK, m.MemMiB)
+			fmt.Fprintf(&md, "| %s | %s | %.0f (%.0f–%.0f) | %.4f | %.2f | %.2f | %.2f (%.2f–%.2f) | %.0f | %.1f | %.1f | %.1f |\n", m.Scenario, m.Target,
+				m.Throughput, lo, hi, m.Success, m.P50ms, m.P95ms, m.P99ms, p99lo, p99hi, m.CPUPct, perK, m.MemMiB, loadHi)
 		}
 	}
 	must(os.WriteFile(filepath.Join(h.out, "summary.csv"), csv.Bytes(), 0o600))

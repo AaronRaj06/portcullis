@@ -1,0 +1,100 @@
+{
+  "commit": "b2fab26",
+  "cpusets": {
+    "backends": "4,5",
+    "generator": "0-2",
+    "target": "3"
+  },
+  "duration": "10s",
+  "host": {
+    "cpu": "Apple M1",
+    "docker": "29.9.3 cpus=8 mem=4106539008 kernel=7.0.14-linuxkit",
+    "go": "go version go1.27.4 darwin/arm64",
+    "load": "{ 7.49 8.15 21.52 }"
+  },
+  "runs": 5,
+  "scenarios": [
+    {
+      "name": "throughput-small-ka-c16",
+      "path": "/small",
+      "keepAlive": true,
+      "workers": 16,
+      "rate": 0
+    },
+    {
+      "name": "throughput-small-noka-c16",
+      "path": "/small",
+      "keepAlive": false,
+      "workers": 16,
+      "rate": 0
+    },
+    {
+      "name": "throughput-small-ka-c64",
+      "path": "/small",
+      "keepAlive": true,
+      "workers": 64,
+      "rate": 0
+    },
+    {
+      "name": "throughput-small-noka-c64",
+      "path": "/small",
+      "keepAlive": false,
+      "workers": 64,
+      "rate": 0
+    },
+    {
+      "name": "throughput-small-ka-c256",
+      "path": "/small",
+      "keepAlive": true,
+      "workers": 256,
+      "rate": 0
+    },
+    {
+      "name": "throughput-small-noka-c256",
+      "path": "/small",
+      "keepAlive": false,
+      "workers": 256,
+      "rate": 0
+    },
+    {
+      "name": "throughput-large-ka-c16",
+      "path": "/large",
+      "keepAlive": true,
+      "workers": 16,
+      "rate": 0
+    },
+    {
+      "name": "throughput-large-ka-c64",
+      "path": "/large",
+      "keepAlive": true,
+      "workers": 64,
+      "rate": 0
+    },
+    {
+      "name": "latency-small-ka-r1000",
+      "path": "/small",
+      "keepAlive": true,
+      "workers": 0,
+      "rate": 1000
+    },
+    {
+      "name": "latency-small-ka-r4000",
+      "path": "/small",
+      "keepAlive": true,
+      "workers": 0,
+      "rate": 4000
+    },
+    {
+      "name": "latency-large-ka-r500",
+      "path": "/large",
+      "keepAlive": true,
+      "workers": 0,
+      "rate": 500
+    }
+  ],
+  "started": "2026-11-20T14:37:14.47138Z",
+  "vm_sysctls": {
+    "net.ipv4.ip_local_port_range": "1024\t65535",
+    "net.ipv4.tcp_tw_reuse": "1"
+  }
+}
