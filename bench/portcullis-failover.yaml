@@ -3,7 +3,7 @@
 version: bench-failover
 pools:
   - name: pair
-    backends: [{address: "be1:9000"}, {address: "be2:9000"}]
+    backends: [{address: "127.0.0.1:9000"}, {address: "127.0.0.1:9001"}]
     healthCheck: {path: /healthz, interval: 1s, timeout: 500ms, healthy: 1, unhealthy: 2}
     ejection: {after: 1, for: 5s, max: 5s}
     retries: {attempts: 2, budget: 0.2, burst: 50}

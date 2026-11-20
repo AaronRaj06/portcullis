@@ -10,6 +10,10 @@
 //     queueing (no coordinated omission);
 //   - failure injection: a backend stops accepting connections under load.
 //
+// Containers are pinned to disjoint vCPU sets (--cpuset-cpus): the load
+// generator, the proxy under test (one core, so the proxy is the bottleneck),
+// and the backends never share a core.
+//
 // Every scenario runs -runs times; the summary reports medians. Raw vegeta
 // files, per-run JSON and docker stats samples stay in the output directory.
 package main
@@ -22,10 +26,8 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"log"
 	"math"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -37,9 +39,8 @@ import (
 )
 
 const (
-	image   = "portcullis-bench"
-	network = "pbench"
-	nginx   = "nginx:1.27.5-alpine"
+	image = "portcullis-bench"
+	nginx = "nginx:1.27.5-alpine"
 )
 
 // target is one system under test.
@@ -49,11 +50,22 @@ type target struct {
 	url       string // base URL inside the bench network
 }
 
+// All containers share the Docker VM's network namespace (--network host) and
+// talk over its loopback, so no bridge, veth pair or NAT sits in the path. On
+// a bridge network every target, even the bare backend, capped out at
+// ~12-13k req/s while below its CPU limit: the virtual network was the
+// bottleneck, not the proxies. (On Docker Desktop "host" is the Linux VM, so no
+// ports open on the Mac.)
 var targets = []target{
-	{"direct", "be1", "http://be1:9000"},
-	{"portcullis", "pc", "http://pc:8080"},
-	{"httputil", "rp", "http://rp:8080"},
-	{"nginx", "nx", "http://nx:8080"},
+	{"direct", "be1", "http://127.0.0.1:9000"},
+	{"portcullis", "pc", "http://127.0.0.1:8080"},
+	{"httputil", "rp", "http://127.0.0.1:8081"},
+	{"nginx", "nx", "http://127.0.0.1:8082"},
+}
+
+var failoverTargets = []target{
+	{"portcullis", "pcf", "http://127.0.0.1:8090"},
+	{"nginx", "nx", "http://127.0.0.1:8083"},
 }
 
 // scenario is one load shape.
@@ -98,11 +110,14 @@ func main() {
 		out      = flag.String("out", filepath.Join("bench", "results", time.Now().UTC().Format("20060102-150405")), "output directory")
 		duration = flag.Duration("duration", 10*time.Second, "length of each measured run")
 		runs     = flag.Int("runs", 3, "runs per scenario (medians are reported)")
-		cpus     = flag.String("cpus", "2", "CPU quota for every target and the load generator")
+		genCPUs  = flag.String("gen-cpus", "0-2", "vCPUs (cpuset) for the vegeta load generator")
+		tgtCPUs  = flag.String("target-cpus", "3", "vCPUs (cpuset) for each proxy under test")
+		beCPUs   = flag.String("backend-cpus", "4,5", "vCPUs (cpuset) for the backends")
 		only     = flag.String("targets", "direct,portcullis,httputil,nginx", "targets to run")
 		rates    = flag.String("rates", "2000,6000", "open-loop rates for /small (req/s)")
 		quick    = flag.Bool("quick", false, "small matrix (for optimisation rounds)")
 		failover = flag.Bool("failover", true, "run the failure-injection scenario")
+		foRuns   = flag.Int("failover-runs", 3, "runs of the failure-injection scenario")
 		profile  = flag.Duration("profile", 0, "if > 0, capture a Portcullis CPU profile of this length during the first throughput run")
 		build    = flag.Bool("build", true, "build the bench image first")
 	)
@@ -110,7 +125,7 @@ func main() {
 	must(os.MkdirAll(filepath.Join(*out, "raw"), 0o750))
 	abs, err := filepath.Abs(*out)
 	must(err)
-	h := &harness{out: abs, dur: *duration, cpus: *cpus}
+	h := &harness{out: abs, dur: *duration, gen: *genCPUs, tgt: *tgtCPUs, be: *beCPUs}
 
 	if *build {
 		h.sh("docker", "build", "-q", "-t", image, "-f", "bench/Dockerfile", ".")
@@ -147,19 +162,25 @@ func main() {
 		selected[strings.TrimSpace(t)] = true
 	}
 	h.writeJSON("meta.json", map[string]any{
-		"started": time.Now().UTC(), "duration": duration.String(), "runs": *runs, "cpus": *cpus,
+		"started": time.Now().UTC(), "duration": duration.String(), "runs": *runs,
+		"cpusets":   map[string]string{"generator": *genCPUs, "target": *tgtCPUs, "backends": *beCPUs},
 		"scenarios": scenarios, "host": hostInfo(), "commit": strings.TrimSpace(h.output("git", "rev-parse", "--short", "HEAD")),
 	})
 
 	var all []result
 	profiled := false
 	for _, s := range scenarios {
+		var ts []target
 		for _, t := range targets {
-			if !selected[t.name] {
-				continue
+			if selected[t.name] {
+				ts = append(ts, t)
+				h.attack(s, t, 2*time.Second, "warmup") // discarded: fills connection pools, warms caches
 			}
-			h.attack(s, t, 2*time.Second, "warmup") // discarded: fills connection pools, warms caches
-			for i := 1; i <= *runs; i++ {
+		}
+		// Runs are interleaved across targets (A B C D, A B C D, ...) so slow
+		// drift on the host, such as thermal throttling, affects all of them alike.
+		for i := 1; i <= *runs; i++ {
+			for _, t := range ts {
 				var prof chan struct{}
 				if *profile > 0 && !profiled && t.name == "portcullis" && s.Workers > 0 {
 					profiled = true
@@ -178,15 +199,15 @@ func main() {
 	h.writeJSON("results.json", all)
 	h.summarise(scenarios, all)
 	if *failover {
-		h.failover(*runs)
+		h.failover(*foRuns)
 	}
 	log.Printf("done: %s", abs)
 }
 
 type harness struct {
-	out  string
-	dur  time.Duration
-	cpus string
+	out          string
+	dur          time.Duration
+	gen, tgt, be string // cpusets
 }
 
 func must(err error) {
@@ -214,23 +235,22 @@ var containers = []string{"be1", "be2", "pc", "pcf", "rp", "nx"}
 
 func (h *harness) up() {
 	h.down()
-	h.quiet("docker", "network", "create", network)
-	run := func(name string, cmd ...string) {
-		args := append([]string{"run", "-d", "--name", name, "--network", network, "--cpus", h.cpus}, cmd...)
+	run := func(name, cpus string, cmd ...string) {
+		args := append([]string{"run", "-d", "--name", name, "--network", "host", "--cpuset-cpus", cpus}, cmd...)
 		h.sh(append([]string{"docker"}, args...)...)
 	}
-	run("be1", image, "backend", "-name", "be1")
-	run("be2", image, "backend", "-name", "be2")
-	run("pc", "-p", "127.0.0.1:19901:9901", image, "portcullis", "-config", "/etc/portcullis/portcullis.yaml",
-		"-listen", ":8080", "-admin-listen", ":9901", "-pprof", "-log-level", "warn")
-	run("pcf", image, "portcullis", "-config", "/etc/portcullis/portcullis-failover.yaml", "-listen", ":8080",
-		"-admin-listen", ":9901", "-log-level", "warn")
-	run("rp", image, "rproxy", "-upstream", "http://be1:9000")
+	run("be1", h.be, image, "backend", "-name", "be1", "-listen", "127.0.0.1:9000")
+	run("be2", h.be, image, "backend", "-name", "be2", "-listen", "127.0.0.1:9001")
+	run("pc", h.tgt, image, "portcullis", "-config", "/etc/portcullis/portcullis.yaml",
+		"-listen", "127.0.0.1:8080", "-admin-listen", "127.0.0.1:9901", "-pprof", "-log-level", "warn")
+	run("pcf", h.tgt, image, "portcullis", "-config", "/etc/portcullis/portcullis-failover.yaml",
+		"-listen", "127.0.0.1:8090", "-admin-listen", "127.0.0.1:9902", "-log-level", "warn")
+	run("rp", h.tgt, image, "rproxy", "-listen", "127.0.0.1:8081", "-upstream", "http://127.0.0.1:9000")
 	conf, err := filepath.Abs("bench/nginx/nginx.conf")
 	must(err)
-	run("nx", "-v", conf+":/etc/nginx/nginx.conf:ro", nginx)
+	run("nx", h.tgt, "-v", conf+":/etc/nginx/nginx.conf:ro", nginx)
 	// Wait until every target answers.
-	for _, t := range append(targets, target{"failover-portcullis", "pcf", "http://pcf:8080"}, target{"failover-nginx", "nx", "http://nx:8081"}) {
+	for _, t := range append(append([]target{}, targets...), failoverTargets...) {
 		ok := false
 		for i := 0; i < 30 && !ok; i++ {
 			r := h.attack(scenario{Name: "ready", Path: "/small", KeepAlive: true, Rate: 20}, t, time.Second, "ready")
@@ -259,7 +279,7 @@ func (h *harness) attack(s scenario, t target, d time.Duration, id string) resul
 func (h *harness) attackURL(s scenario, t target, url string, d time.Duration, id string) result {
 	file := fmt.Sprintf("%s-%s-%s", s.Name, t.name, id)
 	must(os.WriteFile(filepath.Join(h.out, "raw", file+".targets"), []byte("GET "+url+"\n"), 0o600))
-	args := []string{"run", "--rm", "--user", "0", "--network", network, "--cpus", h.cpus,
+	args := []string{"run", "--rm", "--user", "0", "--network", "host", "--cpuset-cpus", h.gen,
 		"-v", h.out + "/raw:/out", image, "vegeta", "attack",
 		"-targets=/out/" + file + ".targets", "-duration=" + d.String(), "-timeout=10s",
 		"-keepalive=" + strconv.FormatBool(s.KeepAlive), "-output=/out/" + file + ".bin"}
@@ -270,11 +290,19 @@ func (h *harness) attackURL(s scenario, t target, url string, d time.Duration, i
 		args = append(args, "-rate="+strconv.Itoa(s.Rate), "-max-workers=2048")
 	}
 	h.sh(append([]string{"docker"}, args...)...)
-	r := report(filepath.Join(h.out, "raw", file+".bin"))
+	bin := filepath.Join(h.out, "raw", file+".bin")
+	r, rawReport := report(bin)
 	r.Scenario, r.Target = s.Name, t.name
-	if id == "warmup" || id == "ready" {
-		_ = os.Remove(filepath.Join(h.out, "raw", file+".bin"))
+	switch {
+	case id == "warmup" || id == "ready":
+		_ = os.Remove(bin)
 		_ = os.Remove(filepath.Join(h.out, "raw", file+".targets"))
+	case s.Name != "failover":
+		// Keep vegeta's full JSON report (latency distribution, status codes,
+		// errors) and drop the per-request binary: at ~20k req/s a 10s run is
+		// ~20 MB, and the full matrix would need gigabytes of disk.
+		must(os.WriteFile(filepath.Join(h.out, "raw", file+".vegeta.json"), rawReport, 0o600))
+		_ = os.Remove(bin)
 	}
 	return r
 }
@@ -293,8 +321,8 @@ func (h *harness) measure(s scenario, t target, run int) result {
 	return r
 }
 
-// report parses `vegeta report -type=json`.
-func report(bin string) result {
+// report parses `vegeta report -type=json` and also returns the raw report.
+func report(bin string) (result, []byte) {
 	out, err := exec.Command(vegetaBin(), "report", "-type=json", bin).Output() //nolint:gosec
 	must(err)
 	var rep struct {
@@ -316,7 +344,7 @@ func report(bin string) result {
 		errs = errs[:5]
 	}
 	return result{Requests: rep.Requests, Throughput: rep.Throughput, Success: rep.Success,
-		P50ms: ms(rep.Latencies.P50), P95ms: ms(rep.Latencies.P95), P99ms: ms(rep.Latencies.P99), MaxMs: ms(rep.Latencies.Max), Errors: errs}
+		P50ms: ms(rep.Latencies.P50), P95ms: ms(rep.Latencies.P95), P99ms: ms(rep.Latencies.P99), MaxMs: ms(rep.Latencies.Max), Errors: errs}, out
 }
 
 func vegetaBin() string {
@@ -398,6 +426,14 @@ func (h *harness) writeJSON(name string, v any) {
 	must(os.WriteFile(filepath.Join(h.out, name), b, 0o600))
 }
 
+func spread(rs []result, f func(result) float64) (lo, hi float64) {
+	lo, hi = math.Inf(1), math.Inf(-1)
+	for _, r := range rs {
+		lo, hi = math.Min(lo, f(r)), math.Max(hi, f(r))
+	}
+	return lo, hi
+}
+
 func median(xs []float64) float64 {
 	if len(xs) == 0 {
 		return 0
@@ -418,8 +454,8 @@ func (h *harness) summarise(scenarios []scenario, all []result) {
 		group[key{r.Scenario, r.Target}] = append(group[key{r.Scenario, r.Target}], r)
 	}
 	var csv, md bytes.Buffer
-	csv.WriteString("scenario,target,runs,throughput_rps,success,p50_ms,p95_ms,p99_ms,max_ms,cpu_pct,mem_mib\n")
-	md.WriteString("| scenario | target | req/s | success | p50 ms | p95 ms | p99 ms | CPU % | mem MiB |\n|---|---|--:|--:|--:|--:|--:|--:|--:|\n")
+	csv.WriteString("scenario,target,runs,throughput_rps,throughput_min,throughput_max,success,p50_ms,p95_ms,p99_ms,p99_min,p99_max,max_ms,cpu_pct,cpu_pct_per_1k_rps,mem_mib\n")
+	md.WriteString("| scenario | target | req/s (min–max) | success | p50 ms | p95 ms | p99 ms (min–max) | CPU % | CPU %/1k req/s | mem MiB |\n|---|---|--:|--:|--:|--:|--:|--:|--:|--:|\n")
 	var summary []result
 	for _, s := range scenarios {
 		for _, t := range targets {
@@ -440,10 +476,16 @@ func (h *harness) summarise(scenarios []scenario, all []result) {
 				P99ms: pick(func(r result) float64 { return r.P99ms }), MaxMs: pick(func(r result) float64 { return r.MaxMs }),
 				CPUPct: pick(func(r result) float64 { return r.CPUPct }), MemMiB: pick(func(r result) float64 { return r.MemMiB })}
 			summary = append(summary, m)
-			fmt.Fprintf(&csv, "%s,%s,%d,%.0f,%.4f,%.3f,%.3f,%.3f,%.3f,%.0f,%.1f\n", m.Scenario, m.Target, m.Run,
-				m.Throughput, m.Success, m.P50ms, m.P95ms, m.P99ms, m.MaxMs, m.CPUPct, m.MemMiB)
-			fmt.Fprintf(&md, "| %s | %s | %.0f | %.4f | %.2f | %.2f | %.2f | %.0f | %.1f |\n", m.Scenario, m.Target,
-				m.Throughput, m.Success, m.P50ms, m.P95ms, m.P99ms, m.CPUPct, m.MemMiB)
+			lo, hi := spread(rs, func(r result) float64 { return r.Throughput })
+			p99lo, p99hi := spread(rs, func(r result) float64 { return r.P99ms })
+			perK := 0.0 // CPU cost: % of one core per 1000 req/s served
+			if m.Throughput > 0 {
+				perK = m.CPUPct / (m.Throughput / 1000)
+			}
+			fmt.Fprintf(&csv, "%s,%s,%d,%.0f,%.0f,%.0f,%.4f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.0f,%.2f,%.1f\n", m.Scenario, m.Target, m.Run,
+				m.Throughput, lo, hi, m.Success, m.P50ms, m.P95ms, m.P99ms, p99lo, p99hi, m.MaxMs, m.CPUPct, perK, m.MemMiB)
+			fmt.Fprintf(&md, "| %s | %s | %.0f (%.0f–%.0f) | %.4f | %.2f | %.2f | %.2f (%.2f–%.2f) | %.0f | %.1f | %.1f |\n", m.Scenario, m.Target,
+				m.Throughput, lo, hi, m.Success, m.P50ms, m.P95ms, m.P99ms, p99lo, p99hi, m.CPUPct, perK, m.MemMiB)
 		}
 	}
 	must(os.WriteFile(filepath.Join(h.out, "summary.csv"), csv.Bytes(), 0o600))
@@ -456,16 +498,13 @@ func (h *harness) captureProfile(d time.Duration) chan struct{} {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		url := fmt.Sprintf("http://127.0.0.1:19901/debug/pprof/profile?seconds=%d", int(d.Seconds()))
-		resp, err := http.Get(url) //nolint:gosec,noctx // fixed local admin URL
-		if err != nil {
+		// The admin port is on the Docker VM's loopback; fetch it from a
+		// container in that namespace (pinned with the load generator).
+		url := fmt.Sprintf("http://127.0.0.1:9901/debug/pprof/profile?seconds=%d", int(d.Seconds()))
+		b, err := exec.Command("docker", "run", "--rm", "--network", "host", "--cpuset-cpus", h.gen, //nolint:gosec
+			"alpine:3.20", "wget", "-q", "-O", "-", url).Output()
+		if err != nil || len(b) == 0 {
 			log.Printf("profile capture failed: %v", err)
-			return
-		}
-		defer resp.Body.Close()
-		b, err := io.ReadAll(resp.Body)
-		if err != nil || resp.StatusCode != 200 {
-			log.Printf("profile capture failed: %d %v", resp.StatusCode, err)
 			return
 		}
 		must(os.WriteFile(filepath.Join(h.out, "portcullis-cpu.prof"), b, 0o600))
@@ -493,7 +532,7 @@ func (h *harness) failover(runs int) {
 	}
 	var out []fo
 	s := scenario{Name: "failover", Path: "/small", KeepAlive: true, Rate: rate}
-	for _, t := range []target{{"portcullis", "pcf", "http://pcf:8080"}, {"nginx", "nx", "http://nx:8081"}} {
+	for _, t := range failoverTargets {
 		for run := 1; run <= runs; run++ {
 			h.quiet("docker", "kill", "-s", "USR2", "be2") // make sure be2 is up
 			time.Sleep(7 * time.Second)                    // past any ejection / fail_timeout from the last run

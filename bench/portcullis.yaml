@@ -1,9 +1,9 @@
 # Benchmark config: one pool, one route, no active health checks (to match the
-# other targets).
+# other targets). Everything runs on the Docker VM's loopback (--network host).
 version: bench
 pools:
   - name: be
-    backends: [{address: "be1:9000"}]
+    backends: [{address: "127.0.0.1:9000"}]
 routes:
   - name: all
     backends: [{pool: be}]
