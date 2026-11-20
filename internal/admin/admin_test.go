@@ -147,3 +147,56 @@ func TestTokenFromFile(t *testing.T) {
 		t.Fatal("empty token accepted")
 	}
 }
+
+func TestIfMatchRejectsStalePushes(t *testing.T) {
+	_, h, srv := setup(t, "", false)
+	put := func(body, match string) (int, http.Header) {
+		req, _ := http.NewRequest("PUT", srv.URL+"/config", strings.NewReader(body))
+		if match != "" {
+			req.Header.Set("If-Match", match)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode, resp.Header
+	}
+	if code, _ := put(good, "*"); code != 412 {
+		t.Fatalf("If-Match * with no config applied: %d, want 412", code)
+	}
+	code, hdr := put(good, "")
+	etag := hdr.Get("ETag")
+	if code != 200 || len(etag) != 66 {
+		t.Fatalf("first push: %d etag %q", code, etag)
+	}
+	v2 := strings.Replace(good, "v1", "v2", 1)
+	v3 := strings.Replace(good, "v1", "v3", 1)
+	code, hdr = put(v2, etag) // writer A read v1 and pushes v2 over it
+	if code != 200 {
+		t.Fatalf("push with the current ETag: %d", code)
+	}
+	if code, _ := put(v3, etag); code != 412 { // writer B also read v1: stale
+		t.Fatalf("push with a stale ETag: %d, want 412", code)
+	}
+	if h.Current().Version != "v2" {
+		t.Fatalf("stale push changed the config to %q", h.Current().Version)
+	}
+	_, getHdr := call2(t, srv.URL+"/config")
+	if getHdr.Get("ETag") != hdr.Get("ETag") {
+		t.Fatalf("GET ETag %q != PUT ETag %q", getHdr.Get("ETag"), hdr.Get("ETag"))
+	}
+	if code, _ := put(v3, "*"); code != 200 {
+		t.Fatalf("If-Match * with a config applied: %d", code)
+	}
+}
+
+func call2(t *testing.T, url string) (int, http.Header) {
+	t.Helper()
+	resp, err := http.Get(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	return resp.StatusCode, resp.Header
+}

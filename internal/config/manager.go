@@ -3,6 +3,7 @@ package config
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"log/slog"
 	"net/http"
@@ -41,7 +42,18 @@ type Manager struct {
 	status     Status
 	cfg        *Config
 	stopHealth context.CancelFunc
-	transports []*http.Transport
+	transports map[string]*http.Transport
+}
+
+// PreconditionError means the caller's If-Match did not name the config that
+// is serving, e.g. a stale controller pushing over a newer config.
+type PreconditionError struct {
+	Expected string
+	Current  Status
+}
+
+func (e *PreconditionError) Error() string {
+	return fmt.Sprintf("precondition failed: expected config %s, serving %s", e.Expected, e.Current.Hash)
 }
 
 // NewManager returns a Manager publishing to h. path is the file Reload reads
@@ -79,30 +91,44 @@ func (m *Manager) Reload() (Status, error) {
 // Apply parses raw (YAML or JSON) and publishes it if valid. On any error the
 // current snapshot keeps serving, untouched.
 func (m *Manager) Apply(raw []byte, source string) (Status, error) {
+	return m.ApplyIfMatch(raw, source, "")
+}
+
+// ApplyIfMatch is Apply with optimistic concurrency: if ifMatch is not empty,
+// the config is applied only if the serving config's hash equals it ("*"
+// matches any applied config). The check and the swap happen under one lock,
+// so two writers cannot both pass the check.
+func (m *Manager) ApplyIfMatch(raw []byte, source, ifMatch string) (Status, error) {
 	c, err := Parse(raw)
 	if err != nil {
 		m.record("error")
 		return m.Status(), err
 	}
-	return m.ApplyConfig(c, source)
+	return m.applyConfig(c, source, ifMatch)
 }
 
 // ApplyConfig validates, compiles and publishes c.
 func (m *Manager) ApplyConfig(c *Config, source string) (Status, error) {
+	return m.applyConfig(c, source, "")
+}
+
+func (m *Manager) applyConfig(c *Config, source, ifMatch string) (Status, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	compiled, err := Compile(c, m.limits, m.h.Current())
+	matches := ifMatch == "" || ifMatch == m.status.Hash || (ifMatch == "*" && m.status.Generation > 0)
+	if !matches {
+		m.record("conflict")
+		return m.status, &PreconditionError{Expected: ifMatch, Current: m.status}
+	}
+	compiled, err := Compile(c, m.limits, m.h.Current(), m.transports)
 	if err != nil {
 		m.record("error")
 		m.log.Warn("config rejected; previous config keeps serving", "source", source, "error", err.Error())
 		return m.status, err
 	}
 	if cur := m.h.Current(); cur != nil && cur.Hash == compiled.Snapshot.Hash {
-		for _, t := range compiled.Transports {
-			t.CloseIdleConnections()
-		}
-		m.record("unchanged")
+		m.record("unchanged") // same hash means same transport keys: nothing new was built
 		st := m.status
 		st.Changed = false
 		return st, nil
@@ -123,10 +149,13 @@ func (m *Manager) ApplyConfig(c *Config, source string) (Status, error) {
 		}
 		health.Run(hctx, client, ph.Pool, ph.Config, nil, m.log)
 	}
-	// Old pool transports: drop their idle connections now. Busy ones finish
-	// their in-flight requests and then time out idle.
-	for _, t := range m.transports {
-		t.CloseIdleConnections()
+	// Transports no longer used by any pool: drop their idle connections now.
+	// Busy ones finish their in-flight requests and then time out idle.
+	// Transports with unchanged settings were reused and keep their connections.
+	for key, t := range m.transports {
+		if compiled.Transports[key] != t {
+			t.CloseIdleConnections()
+		}
 	}
 	m.transports = compiled.Transports
 

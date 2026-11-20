@@ -54,7 +54,7 @@ func New(reg prometheus.Registerer) *Metrics {
 			Name: "portcullis_panic_picks_total", Help: "Picks made in panic mode because no backend was available.",
 		}, []string{"pool"}),
 		reloads: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Name: "portcullis_config_reloads_total", Help: "Config apply attempts, by result (success, unchanged, error).",
+			Name: "portcullis_config_reloads_total", Help: "Config apply attempts, by result (success, unchanged, error, conflict).",
 		}, []string{"result"}),
 		gen: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "portcullis_config_generation", Help: "Generation of the config serving traffic; increments on every successful apply.",

@@ -12,6 +12,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -136,15 +138,42 @@ func Parse(raw []byte) (*Config, error) {
 	return &c, nil
 }
 
-// Hash is the sha256 of the canonical JSON form (after defaults), so two
-// configs that mean the same thing hash the same whatever their formatting.
-func (c *Config) Hash() string {
+// Hash is the sha256 of the canonical JSON form (after defaults) plus the
+// contents of every file the config references (CA bundles). So two configs
+// that mean the same thing hash the same whatever their formatting, and
+// replacing a CA file's contents counts as a change.
+func (c *Config) Hash() string { return c.hashWith(readFiles(c)) }
+
+func (c *Config) hashWith(files map[string][]byte) string {
 	b, err := json.Marshal(c)
 	if err != nil { // cannot happen: every field is JSON-safe
 		panic(err)
 	}
-	sum := sha256.Sum256(b)
-	return hex.EncodeToString(sum[:])
+	h := sha256.New()
+	h.Write(b)
+	paths := make([]string, 0, len(files))
+	for p := range files {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+	for _, p := range paths {
+		sum := sha256.Sum256(files[p])
+		fmt.Fprintf(h, "\x00%s\x00%x", p, sum)
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// readFiles reads every referenced file once. Unreadable files map to nil;
+// Validate reports them.
+func readFiles(c *Config) map[string][]byte {
+	files := map[string][]byte{}
+	for _, p := range c.Pools {
+		if p.TLS != nil && p.TLS.CAFile != "" {
+			b, _ := os.ReadFile(p.TLS.CAFile)
+			files[p.TLS.CAFile] = b
+		}
+	}
+	return files
 }
 
 // applyDefaults fills omitted optional fields in place, so validation,

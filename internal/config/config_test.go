@@ -148,7 +148,7 @@ func TestExampleConfigIsValid(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	compiled, err := Compile(c, proxy.DefaultLimits, nil)
+	compiled, err := Compile(c, proxy.DefaultLimits, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +169,7 @@ routes:
   - {name: s, path: /s, backends: [{pool: secure}]}
   - {name: p, backends: [{pool: plain}]}
 `)
-	compiled, err := Compile(c, proxy.DefaultLimits, nil)
+	compiled, err := Compile(c, proxy.DefaultLimits, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +189,7 @@ func TestReloadKeepsBackendState(t *testing.T) {
 	v1 := mustParse(t, `
 pools: [{name: p, backends: [{address: "10.0.0.1:80"}, {address: "10.0.0.2:80"}]}]
 routes: [{name: r, backends: [{pool: p}]}]`)
-	c1, err := Compile(v1, proxy.DefaultLimits, nil)
+	c1, err := Compile(v1, proxy.DefaultLimits, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,7 +197,7 @@ routes: [{name: r, backends: [{pool: p}]}]`)
 	v2 := mustParse(t, `
 pools: [{name: p, lb: least_conn, backends: [{address: "10.0.0.1:80"}, {address: "10.0.0.3:80"}]}]
 routes: [{name: r, backends: [{pool: p}]}]`)
-	c2, err := Compile(v2, proxy.DefaultLimits, c1.Snapshot)
+	c2, err := Compile(v2, proxy.DefaultLimits, c1.Snapshot, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -289,4 +289,66 @@ func writeCA(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return p
+}
+
+func TestHashCoversReferencedFiles(t *testing.T) {
+	ca := writeCA(t)
+	c := mustParse(t, `
+pools: [{name: s, scheme: https, tls: {caFile: "`+ca+`"}, backends: [{address: "10.0.0.2:443"}]}]
+routes: [{name: r, backends: [{pool: s}]}]`)
+	_ = c.Validate()
+	before := c.Hash()
+	other := writeCA(t)
+	data, _ := os.ReadFile(other)
+	if err := os.WriteFile(ca, data, 0o600); err != nil { // rotate the CA in place
+		t.Fatal(err)
+	}
+	if c.Hash() == before {
+		t.Fatal("replacing the CA file's contents did not change the config hash")
+	}
+}
+
+func TestTransportsReusedWhenSettingsUnchanged(t *testing.T) {
+	ca := writeCA(t)
+	cfg := func(route string) *Config {
+		return mustParse(t, `
+pools:
+  - {name: g, scheme: h2c, backends: [{address: "10.0.0.1:50051"}]}
+  - {name: s, scheme: https, tls: {caFile: "`+ca+`"}, backends: [{address: "10.0.0.2:443"}]}
+routes:
+  - {name: `+route+`, backends: [{pool: g}]}
+  - {name: other, path: /s, backends: [{pool: s}]}`)
+	}
+	c1, err := Compile(cfg("r1"), proxy.DefaultLimits, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c2, err := Compile(cfg("r2"), proxy.DefaultLimits, c1.Snapshot, c1.Transports)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key, tr := range c1.Transports {
+		if c2.Transports[key] != tr {
+			t.Errorf("transport %q rebuilt although its settings did not change", key)
+		}
+	}
+	other := writeCA(t)
+	data, _ := os.ReadFile(other)
+	_ = os.WriteFile(ca, data, 0o600)
+	c3, err := Compile(cfg("r3"), proxy.DefaultLimits, c2.Snapshot, c2.Transports)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c3.Transports["h2c"] != c1.Transports["h2c"] {
+		t.Error("h2c transport rebuilt although only the CA changed")
+	}
+	reusedTLS := false
+	for key, tr := range c3.Transports {
+		if key != "h2c" && tr == c2.Transports[key] {
+			reusedTLS = true
+		}
+	}
+	if reusedTLS || len(c3.Transports) != 2 {
+		t.Error("TLS transport must be rebuilt when its CA contents change")
+	}
 }

@@ -3,8 +3,9 @@
 //	GET  /healthz       liveness: the process is up
 //	GET  /readyz        readiness: a config is serving and we are not draining
 //	GET  /metrics       Prometheus
-//	GET  /config        current version, hash and generation (?full=1 adds the config)
-//	PUT  /config        push a new config (JSON or YAML); validated before it is swapped in
+//	GET  /config        current version, hash and generation (?full=1 adds the config); ETag = hash
+//	PUT  /config        push a new config (JSON or YAML); validated before it is swapped in.
+//	                    With If-Match: "<hash>" it applies only over that config (else 412).
 //	POST /reload        re-read the config file
 //	     /debug/pprof/  profiling, only if enabled
 //
@@ -90,6 +91,7 @@ func (s *Server) readyz(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) getConfig(w http.ResponseWriter, r *http.Request) {
 	st := s.Manager.Status()
+	setETag(w, st)
 	if r.URL.Query().Get("full") == "" {
 		writeJSON(w, http.StatusOK, st)
 		return
@@ -109,8 +111,23 @@ func (s *Server) putConfig(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": err.Error()})
 		return
 	}
-	st, err := s.Manager.Apply(raw, "api")
+	st, err := s.Manager.ApplyIfMatch(raw, "api", ifMatch(r))
 	s.reply(w, st, err)
+}
+
+// ifMatch extracts the hash from If-Match: "<hash>" (strong ETags only; "*" passes through).
+func ifMatch(r *http.Request) string {
+	v := strings.TrimSpace(r.Header.Get("If-Match"))
+	if v == "*" {
+		return v
+	}
+	return strings.Trim(v, `"`)
+}
+
+func setETag(w http.ResponseWriter, st config.Status) {
+	if st.Hash != "" {
+		w.Header().Set("ETag", `"`+st.Hash+`"`)
+	}
 }
 
 func (s *Server) reload(w http.ResponseWriter, _ *http.Request) {
@@ -119,8 +136,17 @@ func (s *Server) reload(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) reply(w http.ResponseWriter, st config.Status, err error) {
+	setETag(w, st)
 	if err == nil {
 		writeJSON(w, http.StatusOK, st)
+		return
+	}
+	var pe *config.PreconditionError
+	if errors.As(err, &pe) {
+		writeJSON(w, http.StatusPreconditionFailed, struct {
+			Error   string        `json:"error"`
+			Current config.Status `json:"current"`
+		}{err.Error(), st})
 		return
 	}
 	var ve *config.ValidationError

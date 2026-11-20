@@ -1,12 +1,12 @@
 package config
 
 import (
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
 	"net/http"
 	"net/netip"
-	"os"
 	"strings"
 	"time"
 
@@ -18,8 +18,8 @@ import (
 // Compiled is a validated config turned into live objects, not yet published.
 type Compiled struct {
 	Snapshot   *proxy.Snapshot
-	Health     []PoolHealth      // active checks to run while this snapshot is current
-	Transports []*http.Transport // pool-specific transports, closed when superseded
+	Health     []PoolHealth               // active checks to run while this snapshot is current
+	Transports map[string]*http.Transport // pool-specific transports by settings key
 }
 
 // PoolHealth pairs a pool with its active health-check settings.
@@ -30,10 +30,13 @@ type PoolHealth struct {
 
 // Compile validates c and builds a snapshot. Backends that also existed in prev
 // (same pool name and address) inherit their health and ejection state.
-func Compile(c *Config, l proxy.Limits, prev *proxy.Snapshot) (*Compiled, error) {
+// Pool transports whose settings are unchanged are taken from reuse, so their
+// upstream connections survive the reload.
+func Compile(c *Config, l proxy.Limits, prev *proxy.Snapshot, reuse map[string]*http.Transport) (*Compiled, error) {
 	if err := c.Validate(); err != nil {
 		return nil, err
 	}
+	files := readFiles(c) // read once: the hash and the transports see the same bytes
 	old := map[string]*lb.Backend{}
 	if prev != nil {
 		for _, p := range prev.Router.Pools() {
@@ -43,7 +46,7 @@ func Compile(c *Config, l proxy.Limits, prev *proxy.Snapshot) (*Compiled, error)
 		}
 	}
 
-	out := &Compiled{}
+	out := &Compiled{Transports: map[string]*http.Transport{}}
 	pools := map[string]*lb.Pool{}
 	for _, pc := range c.Pools {
 		p := &lb.Pool{Name: pc.Name, Scheme: pc.Scheme, Panic: pc.Panic}
@@ -61,11 +64,19 @@ func Compile(c *Config, l proxy.Limits, prev *proxy.Snapshot) (*Compiled, error)
 		p.EjectAfter, p.EjectFor, p.MaxEjectFor = pc.Ejection.After, time.Duration(pc.Ejection.For), time.Duration(pc.Ejection.Max)
 		p.Retries = pc.Retries.Attempts
 		p.Budget = lb.NewRetryBudget(pc.Retries.Budget, pc.Retries.Burst)
-		if t, err := transport(pc, l); err != nil {
-			return nil, fmt.Errorf("pool %q: %w", pc.Name, err)
-		} else if t != nil {
+		if key := transportKey(pc, files); key != "" {
+			t := out.Transports[key]
+			if t == nil {
+				t = reuse[key]
+			}
+			if t == nil {
+				var err error
+				if t, err = transport(pc, l, files); err != nil {
+					return nil, fmt.Errorf("pool %q: %w", pc.Name, err)
+				}
+			}
 			p.Transport = t
-			out.Transports = append(out.Transports, t)
+			out.Transports[key] = t
 		}
 		if pc.Scheme == "h2c" {
 			p.Scheme = "http" // h2c is HTTP/2 over plain http URLs, via the pool's transport
@@ -102,7 +113,7 @@ func Compile(c *Config, l proxy.Limits, prev *proxy.Snapshot) (*Compiled, error)
 	for _, s := range c.TrustedProxies {
 		trusted = append(trusted, netip.MustParsePrefix(s).Masked()) // validated above
 	}
-	out.Snapshot = &proxy.Snapshot{Router: router, TrustedProxies: trusted, Version: c.Version, Hash: c.Hash()}
+	out.Snapshot = &proxy.Snapshot{Router: router, TrustedProxies: trusted, Version: c.Version, Hash: c.hashWith(files)}
 	return out, nil
 }
 
@@ -130,19 +141,29 @@ func balancer(name, hashKey string, bs []*lb.Backend) (lb.Balancer, error) {
 	return nil, fmt.Errorf("unknown lb %q", name)
 }
 
-// transport returns a pool-specific transport, or nil to use the shared default.
-func transport(pc Pool, l proxy.Limits) (*http.Transport, error) {
+// transportKey identifies the settings a pool-specific transport depends on;
+// "" means the pool uses the shared default transport.
+func transportKey(pc Pool, files map[string][]byte) string {
+	switch {
+	case pc.Scheme == "h2c":
+		return "h2c"
+	case pc.TLS != nil:
+		sum := sha256.Sum256(files[pc.TLS.CAFile])
+		return fmt.Sprintf("tls|%s|%s|%x", pc.TLS.ServerName, pc.TLS.CAFile, sum)
+	}
+	return ""
+}
+
+// transport builds a pool-specific transport (see transportKey).
+func transport(pc Pool, l proxy.Limits, files map[string][]byte) (*http.Transport, error) {
 	if pc.Scheme == "h2c" {
 		return proxy.NewH2CTransport(l), nil
 	}
-	if pc.TLS == nil {
-		return nil, nil
-	}
 	cfg := &tls.Config{MinVersion: tls.VersionTLS12, ServerName: pc.TLS.ServerName}
 	if pc.TLS.CAFile != "" {
-		pemData, err := os.ReadFile(pc.TLS.CAFile)
-		if err != nil {
-			return nil, err
+		pemData := files[pc.TLS.CAFile]
+		if pemData == nil {
+			return nil, fmt.Errorf("tls.caFile %s: unreadable", pc.TLS.CAFile)
 		}
 		cfg.RootCAs = x509.NewCertPool()
 		if !cfg.RootCAs.AppendCertsFromPEM(pemData) {
