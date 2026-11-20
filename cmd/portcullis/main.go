@@ -74,7 +74,7 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 		ejectAfter = fs.Int("eject-after", 5, "consecutive gateway failures before a backend is ejected (0 = off)")
 		ejectFor   = fs.Duration("eject-for", 30*time.Second, "base ejection time, multiplied by consecutive ejections")
 		maxEject   = fs.Duration("max-eject-for", 5*time.Minute, "cap on the ejection time (0 = none)")
-		panicMode  = fs.Bool("panic", false, "if no backend is available, send anyway instead of returning 503")
+		panicMode  = fs.Bool("panic", true, "if no backend is available, send to all anyway instead of returning 503 (ADR 0009)")
 		retries    = fs.Int("retries", 2, "extra attempts for idempotent requests that never reached a backend")
 		budget     = fs.Float64("retry-budget", 0.2, "retries allowed as a fraction of requests")
 		trusted    = fs.String("trusted-proxies", "", "comma-separated CIDRs whose X-Forwarded-* headers are trusted")
@@ -236,7 +236,7 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 func flagsConfig(upstreams, ca, algo, hashKey, healthPath string, healthIntv time.Duration,
 	ejectAfter int, ejectFor, maxEject time.Duration, panicMode bool, retries int, budget float64, trusted string) (*config.Config, error) {
 	p := config.Pool{
-		Name: "default", LB: algo, HashKey: hashKey, Panic: panicMode,
+		Name: "default", LB: algo, HashKey: hashKey, Panic: &panicMode,
 		Ejection: &config.Ejection{After: ejectAfter, For: config.Duration(ejectFor), Max: config.Duration(maxEject)},
 		Retries:  &config.Retries{Attempts: retries, Budget: budget, Burst: 10},
 	}

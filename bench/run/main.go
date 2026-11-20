@@ -101,8 +101,9 @@ type result struct {
 	P95ms      float64  `json:"p95_ms"`
 	P99ms      float64  `json:"p99_ms"`
 	MaxMs      float64  `json:"max_ms"`
-	CPUPct     float64  `json:"cpu_pct"` // mean of docker stats samples, 100 = one core
-	MemMiB     float64  `json:"mem_mib"` // peak
+	CPUPct     float64  `json:"cpu_pct"`    // mean of docker stats samples, 100 = one core
+	MemMiB     float64  `json:"mem_mib"`    // peak
+	HostLoad1  float64  `json:"host_load1"` // macOS 1-minute load average when the run ended: context for noise
 	Errors     []string `json:"errors,omitempty"`
 }
 
@@ -121,6 +122,7 @@ func main() {
 		foRuns   = flag.Int("failover-runs", 3, "runs of the failure-injection scenario")
 		profile  = flag.Duration("profile", 0, "if > 0, capture a Portcullis CPU profile of this length during the first throughput run")
 		build    = flag.Bool("build", true, "build the bench image first")
+		matrix   = flag.Bool("matrix", true, "run the throughput/latency matrix (false: failure injection only)")
 	)
 	flag.Parse()
 	must(os.MkdirAll(filepath.Join(*out, "raw"), 0o750))
@@ -133,6 +135,7 @@ func main() {
 	}
 	h.up()
 	defer h.down()
+	sysctls := h.tuneVM()
 
 	var scenarios []scenario
 	for _, c := range []int{16, 64, 256} {
@@ -164,13 +167,18 @@ func main() {
 	}
 	h.writeJSON("meta.json", map[string]any{
 		"started": time.Now().UTC(), "duration": duration.String(), "runs": *runs,
-		"cpusets":   map[string]string{"generator": *genCPUs, "target": *tgtCPUs, "backends": *beCPUs},
-		"scenarios": scenarios, "host": hostInfo(), "commit": strings.TrimSpace(h.output("git", "rev-parse", "--short", "HEAD")),
+		"cpusets":    map[string]string{"generator": *genCPUs, "target": *tgtCPUs, "backends": *beCPUs},
+		"vm_sysctls": sysctls,
+		"scenarios":  scenarios, "host": hostInfo(), "commit": strings.TrimSpace(h.output("git", "rev-parse", "--short", "HEAD")),
 	})
 
 	var all []result
 	profiled := false
+	if !*matrix {
+		scenarios = nil
+	}
 	for _, s := range scenarios {
+		h.drainTimeWait()
 		var ts []target
 		for _, t := range targets {
 			if selected[t.name] {
@@ -198,8 +206,10 @@ func main() {
 			}
 		}
 	}
-	h.writeJSON("results.json", all)
-	h.summarise(scenarios, all)
+	if *matrix {
+		h.writeJSON("results.json", all)
+		h.summarise(scenarios, all)
+	}
 	if *failover {
 		h.failover(*foRuns)
 	}
@@ -314,6 +324,49 @@ func (h *harness) attackURL(s scenario, t target, url string, d time.Duration, i
 	return r
 }
 
+// vmShell runs a command in the Docker VM's own namespaces (all containers use
+// --network host, so this is the network stack every target shares).
+func (h *harness) vmShell(cmd string) string {
+	out, err := exec.Command("docker", "run", "--rm", "--privileged", "--pid=host", "alpine:3.20", //nolint:gosec
+		"nsenter", "-t", "1", "-m", "-n", "--", "sh", "-c", cmd).Output()
+	if err != nil {
+		log.Fatalf("vm command %q: %v", cmd, err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// tuneVM applies the usual load-testing settings to the VM's network stack.
+// Every container shares one ephemeral port range (host networking), and
+// keep-alive-off scenarios leave tens of thousands of sockets in TIME_WAIT for
+// 60 s. Without this, later scenarios failed inside the load generator itself
+// ("bind: address already in use"). The settings last until Docker restarts.
+func (h *harness) tuneVM() map[string]string {
+	h.vmShell("sysctl -qw net.ipv4.ip_local_port_range='1024 65535' net.ipv4.tcp_tw_reuse=1")
+	return map[string]string{
+		"net.ipv4.ip_local_port_range": h.vmShell("sysctl -n net.ipv4.ip_local_port_range"),
+		"net.ipv4.tcp_tw_reuse":        h.vmShell("sysctl -n net.ipv4.tcp_tw_reuse"),
+	}
+}
+
+// drainTimeWait waits (up to 90 s) until few sockets are in TIME_WAIT, so one
+// scenario's closed connections cannot starve the next one of ports.
+func (h *harness) drainTimeWait() {
+	for i := 0; i < 18; i++ {
+		f := strings.Fields(h.vmShell("grep '^TCP:' /proc/net/sockstat"))
+		tw := 0
+		for j := 0; j+1 < len(f); j++ {
+			if f[j] == "tw" {
+				tw, _ = strconv.Atoi(f[j+1])
+			}
+		}
+		if tw < 2000 {
+			return
+		}
+		log.Printf("waiting for %d TIME_WAIT sockets to drain", tw)
+		time.Sleep(5 * time.Second)
+	}
+}
+
 // minFreeDisk is the free space the harness insists on before each attack. A
 // full host disk makes Docker's VM filesystem abort its journal and go
 // read-only, which is far worse than a stopped benchmark.
@@ -339,6 +392,7 @@ func (h *harness) measure(s scenario, t target, run int) result {
 	st := <-samples
 	r.Run = run
 	r.CPUPct, r.MemMiB = summariseStats(st)
+	r.HostLoad1 = hostLoad1()
 	h.writeJSON(filepath.Join("raw", fmt.Sprintf("%s-%s-run%d.stats.json", s.Name, t.name, run)), st)
 	return r
 }
@@ -551,6 +605,7 @@ func (h *harness) failover(runs int) {
 		P99BeforeMs  float64 `json:"p99_before_ms"` // [0, kill)
 		P99AfterMs   float64 `json:"p99_after_ms"`  // [kill, kill+5s)
 		PerSecondErr []int   `json:"per_second_errors"`
+		KillOffsetMs float64 `json:"kill_offset_ms"` // when be2 was really stopped, relative to the first request
 	}
 	var out []fo
 	s := scenario{Name: "failover", Path: "/small", KeepAlive: true, Rate: rate}
@@ -558,49 +613,59 @@ func (h *harness) failover(runs int) {
 		for run := 1; run <= runs; run++ {
 			h.quiet("docker", "kill", "-s", "USR2", "be2") // make sure be2 is up
 			time.Sleep(7 * time.Second)                    // past any ejection / fail_timeout from the last run
+			h.drainTimeWait()
+			// The kill and revive are timed from when the load generator's
+			// container is actually running, and their real wall-clock times are
+			// recorded: container start-up takes seconds and would otherwise skew
+			// every offset (it did in the first full run).
 			var wg sync.WaitGroup
+			var killedAt, revivedAt time.Time
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				time.Sleep(kill)
+				t0 := h.waitForVegeta()
+				time.Sleep(time.Until(t0.Add(kill)))
+				killedAt = time.Now()
 				h.quiet("docker", "kill", "-s", "USR1", "be2")
-				time.Sleep(revive - kill)
+				time.Sleep(time.Until(t0.Add(revive)))
+				revivedAt = time.Now()
 				h.quiet("docker", "kill", "-s", "USR2", "be2")
 			}()
 			id := "run" + strconv.Itoa(run)
-			start := time.Now()
 			h.attackURL(s, t, t.url+s.Path, total, id)
 			wg.Wait()
 			file := filepath.Join(h.out, "raw", fmt.Sprintf("failover-%s-%s.bin", t.name, id))
 			reqs := decode(file)
 			r := fo{Target: t.name, Run: run, Requests: len(reqs), PerSecondErr: make([]int, int(total.Seconds())+2)}
 			var before, after []float64
-			t0 := start
+			t0 := killedAt.Add(-kill)
 			if len(reqs) > 0 {
 				t0 = reqs[0].At
 			}
 			readmit := -1.0
 			for _, q := range reqs {
 				off := q.At.Sub(t0)
+				sinceKill, sinceRevive := q.At.Sub(killedAt), q.At.Sub(revivedAt)
 				if q.Code != 200 {
 					r.Errors++
-					if sec := int(off.Seconds()); sec < len(r.PerSecondErr) {
+					if sec := int(off.Seconds()); sec >= 0 && sec < len(r.PerSecondErr) {
 						r.PerSecondErr[sec]++
 					}
-					if off >= kill {
-						r.RecoveryMs = math.Max(r.RecoveryMs, float64((off - kill).Milliseconds()))
+					if sinceKill >= 0 {
+						r.RecoveryMs = math.Max(r.RecoveryMs, float64(sinceKill.Milliseconds()))
 					}
 				}
 				switch {
-				case off < kill:
+				case sinceKill < 0:
 					before = append(before, q.LatencyMs)
-				case off < kill+5*time.Second:
+				case sinceKill < 5*time.Second:
 					after = append(after, q.LatencyMs)
 				}
-				if off >= revive && q.Backend == "be2" && readmit < 0 {
-					readmit = float64((off - revive).Milliseconds())
+				if sinceRevive >= 0 && q.Backend == "be2" && readmit < 0 {
+					readmit = float64(sinceRevive.Milliseconds())
 				}
 			}
+			r.KillOffsetMs = float64(killedAt.Sub(t0).Milliseconds())
 			r.ReadmitMs = readmit
 			if r.Requests > 0 {
 				r.ErrorPct = 100 * float64(r.Errors) / float64(r.Requests)
@@ -612,6 +677,18 @@ func (h *harness) failover(runs int) {
 		}
 	}
 	h.writeJSON("failover.json", out)
+}
+
+// waitForVegeta returns once the load generator's container is running,
+// which is when the attack starts (to within the 50 ms poll).
+func (h *harness) waitForVegeta() time.Time {
+	for i := 0; i < 400; i++ {
+		if strings.Contains(h.output("docker", "ps", "--filter", "ancestor="+image, "--format", "{{.Command}}"), "vegeta") {
+			return time.Now()
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return time.Now()
 }
 
 type req struct {
@@ -658,6 +735,20 @@ func percentile(xs []float64, p float64) float64 {
 	return s[int(math.Ceil(p*float64(len(s))))-1]
 }
 
+// hostLoad1 is the Mac's 1-minute load average ("{ 1.37 1.74 1.97 }").
+func hostLoad1() float64 {
+	out, err := exec.Command("sysctl", "-n", "vm.loadavg").Output()
+	if err != nil {
+		return 0
+	}
+	f := strings.Fields(strings.Trim(strings.TrimSpace(string(out)), "{}"))
+	if len(f) == 0 {
+		return 0
+	}
+	v, _ := strconv.ParseFloat(f[0], 64)
+	return v
+}
+
 func hostInfo() map[string]string {
 	out := func(args ...string) string {
 		b, _ := exec.Command(args[0], args[1:]...).Output() //nolint:gosec
@@ -667,5 +758,6 @@ func hostInfo() map[string]string {
 		"cpu":    out("sysctl", "-n", "machdep.cpu.brand_string"),
 		"docker": out("docker", "info", "--format", "{{.ServerVersion}} cpus={{.NCPU}} mem={{.MemTotal}} kernel={{.KernelVersion}}"),
 		"go":     out("go", "version"),
+		"load":   out("sysctl", "-n", "vm.loadavg"),
 	}
 }

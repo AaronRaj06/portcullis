@@ -1,6 +1,6 @@
 # ADR 0006: Panic mode is opt-in; ejection back-off is linear and capped
 
-- Status: accepted
+- Status: accepted; the default for panic mode is superseded by ADR 0009 (now on by default)
 - Date: 2026-11-20
 
 ## Context

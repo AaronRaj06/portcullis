@@ -49,7 +49,7 @@ func Compile(c *Config, l proxy.Limits, prev *proxy.Snapshot, reuse map[string]*
 	out := &Compiled{Transports: map[string]*http.Transport{}}
 	pools := map[string]*lb.Pool{}
 	for _, pc := range c.Pools {
-		p := &lb.Pool{Name: pc.Name, Scheme: pc.Scheme, Panic: pc.Panic}
+		p := &lb.Pool{Name: pc.Name, Scheme: pc.Scheme, Panic: *pc.Panic}
 		for _, bc := range pc.Backends {
 			b := lb.NewBackend(bc.Address, bc.Weight)
 			if o := old[pc.Name+"|"+bc.Address]; o != nil {

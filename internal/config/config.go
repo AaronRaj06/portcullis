@@ -39,7 +39,7 @@ type Pool struct {
 	HealthCheck *HealthCheck `json:"healthCheck,omitempty"` // omitted: no active checks
 	Ejection    *Ejection    `json:"ejection,omitempty"`
 	Retries     *Retries     `json:"retries,omitempty"`
-	Panic       bool         `json:"panic,omitempty"`
+	Panic       *bool        `json:"panic,omitempty"` // omitted: true (ADR 0009)
 	TLS         *UpstreamTLS `json:"tls,omitempty"`
 }
 
@@ -202,6 +202,10 @@ func (c *Config) applyDefaults() {
 		}
 		if p.Retries == nil {
 			p.Retries = &Retries{Attempts: 2, Budget: 0.2, Burst: 10}
+		}
+		if p.Panic == nil {
+			on := true // serve from all backends rather than fail when every one looks down (ADR 0009)
+			p.Panic = &on
 		}
 		if hc := p.HealthCheck; hc != nil {
 			fillHealth(hc)

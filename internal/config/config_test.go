@@ -69,6 +69,9 @@ func TestDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	p, r := c.Pools[0], c.Routes[0]
+	if p.Panic == nil || !*p.Panic {
+		t.Error("panic mode must default to on (ADR 0009)")
+	}
 	if p.Scheme != "http" || p.LB != "round_robin" || p.Backends[0].Weight != 1 || p.Ejection.After != 5 ||
 		p.Retries.Attempts != 2 || p.HealthCheck != nil || r.Path != "/" || r.PathType != "Prefix" || *r.Backends[0].Weight != 1 {
 		t.Fatalf("defaults not applied: %+v %+v", p, r)
@@ -350,5 +353,16 @@ routes:
 	}
 	if reusedTLS || len(c3.Transports) != 2 {
 		t.Error("TLS transport must be rebuilt when its CA contents change")
+	}
+}
+
+func TestPanicCanBeTurnedOff(t *testing.T) {
+	c := mustParse(t, strings.Replace(minimal, "backends: [{address", "panic: false\n    backends: [{address", 1))
+	compiled, err := Compile(c, proxy.DefaultLimits, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if compiled.Snapshot.Router.Pools()[0].Panic {
+		t.Fatal("explicit panic: false ignored")
 	}
 }
