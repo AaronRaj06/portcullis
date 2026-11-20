@@ -1,0 +1,9 @@
+# Benchmark config: one pool, one route, no active health checks (to match the
+# other targets).
+version: bench
+pools:
+  - name: be
+    backends: [{address: "be1:9000"}]
+routes:
+  - name: all
+    backends: [{pool: be}]

@@ -1,0 +1,12 @@
+# Failure-injection config: two backends, passive ejection + active checks,
+# 5s ejection to match NGINX's fail_timeout=5s.
+version: bench-failover
+pools:
+  - name: pair
+    backends: [{address: "be1:9000"}, {address: "be2:9000"}]
+    healthCheck: {path: /healthz, interval: 1s, timeout: 500ms, healthy: 1, unhealthy: 2}
+    ejection: {after: 1, for: 5s, max: 5s}
+    retries: {attempts: 2, budget: 0.2, burst: 50}
+routes:
+  - name: all
+    backends: [{pool: pair}]
