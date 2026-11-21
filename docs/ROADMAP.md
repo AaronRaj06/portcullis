@@ -43,13 +43,19 @@ What is deferred, and why. Anything not finished is listed here, never presented
 
 ## Deferred from Phase 5
 
-- **Rate limits are per instance.** N replicas allow N × limit. A shared limit needs an external store (non-goal: no extra services). ADR 0010.
-- **Editing a script above a `rate_limit` call moves its `line:col`** and resets that limiter on reload. Keying by an explicit name (`rate_limit("login", key, ...)`) would fix it if this becomes a problem.
-- **The response phase skips proxy-generated errors** (404, 502, 503, 504) and upgraded connections. It sees only real upstream responses.
-- **No regular expressions, no request body access and no clock built-in** in PolicyScript. Each is a deliberate omission for safety and speed. RE2 (`regexp`) would be safe (linear time) and is the likely first addition.
-- **About 3 extra allocations per request** when policies are attached: the `Env`, the client IP string for `rate_limit`, and `set_header`'s value slice.
+All five gaps recorded at the end of Phase 5 are closed (ADR 0011):
+
+| Gap | Resolution |
+|---|---|
+| Rate limits per instance | `instances: N` divides limits across replicas (approximate; exact needs a shared store) |
+| Limiter reset when its position moved | optional `name` argument: `rate_limit(key, 10, "1m", "login")` |
+| Response phase skipped proxy errors and upgrades | now runs on 502/503/504, client-body errors and WebSocket handshakes |
+| No regex or clock | `s.matches("re")` (RE2, linear time), `now()` (fixed per request) |
+| 3 extra allocations with policies | 1: pooled `Env`, allocation-free `Limiter.AllowBytes` |
 
 ## By design (not planned)
+
+- **Policies cannot read request bodies** (ADR 0011). That would mean buffering bodies before forwarding, which the brief forbids.
 
 - **Listeners and server timeouts need a restart** (ADR 0007). Changing a listen address means rebinding a socket; the server-level timeouts are fixed when `http.Server` is built. Everything that changes routing is live, and so is the TLS certificate.
 - **WebSockets over HTTP/2 need `GODEBUG=http2xconnect=1`** (ADR 0008), Go's own switch for RFC 8441. Without it, clients use HTTP/1.1 WebSockets, which always work.

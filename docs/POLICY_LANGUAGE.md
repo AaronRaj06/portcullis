@@ -5,7 +5,7 @@ PolicyScript is a small rule language that Portcullis runs on every request and 
 It is **safe by construction**:
 
 - There are no loops, no recursion and no user-defined functions, so every policy finishes. Its running time is bounded by its size.
-- Built-ins are pure: no files, no network, no clock. The one exception is `rate_limit`, whose state lives in memory inside the proxy.
+- Built-ins are pure: no files and no network. The only clock is `now()`, the request's arrival time, which stays fixed for the whole request. The one stateful built-in is `rate_limit`, whose state lives in memory inside the proxy.
 - Every program is type-checked before it can be loaded, and errors point at `line:col`.
 - Hard limits apply to source size, nesting depth and node count, and per request to evaluation steps and time.
 
@@ -38,9 +38,15 @@ policies:
     onError: fail_closed   # or fail_open (default fail_closed)
     maxSteps: 10000        # optional, 1..1000000
     timeout: 1ms           # optional, 10µs..100ms
+instances: 3               # top level, optional: proxy replicas sharing the traffic (see rate_limit)
 ```
 
-- **When it runs.** The request handler runs after a route has matched, before a backend is picked. The response handler runs when the upstream response arrives, before its headers go to the client. It does not run for errors the proxy generates itself (404 no route, 502, 503, 504), or for upgraded connections (WebSocket).
+- **When it runs.** The request handler runs after a route has matched, before a backend is picked. The response handler runs before any response headers go to the client:
+  - on upstream responses;
+  - on errors the proxy generates after routing (502, 503, 504, and 400/408/413 for a bad client body), so a policy can add `Retry-After` to a 503;
+  - on WebSocket handshakes (`response.status` is 101 for HTTP/1.1, 200 for HTTP/2).
+
+  It does not run on a policy's own `deny` or `redirect`, or on a 404 for an unmatched route.
 - **Order.** Policies run in config order. A request with no matching route gets a 404 and runs no policies.
 - **Atomic effects.** One policy's effects (headers, path rewrite, pool choice) are applied only when that policy finishes without error. A later policy sees the effects of earlier ones: a rewritten path, a set header.
 - **Terminal actions.** `deny`, `redirect` and `allow` stop the request phase for this policy *and all later policies*.
@@ -93,15 +99,18 @@ The types are `string`, `int`, `bool`, `ip`, `list<string>` and `list<int>`. Act
 | `query(name)` | string | first value of a query parameter |
 | `cookie(name)` | string | value of a request cookie |
 | `client.ip` | ip | the real client: the peer, or behind trusted proxies the first untrusted `X-Forwarded-For` hop |
+| `now()` | int | the request's arrival time in Unix seconds; the same value for every call during one request, in both phases |
 
 **Response values**, response handler only:
 
 | Name | Type | Meaning |
 |---|---|---|
-| `response.status` | int | upstream status code |
+| `response.status` | int | the status the client will get: the upstream's, or the proxy's own error |
 | `response.header(name)` | string | first value of a response header |
 
 **String methods:** `s.starts_with(t)`, `s.ends_with(t)` and `s.contains(t)` return bool; `s.lower()` and `s.upper()` return string; `s.len()` returns int (bytes).
+
+`s.matches(re)` returns bool. `re` must be a string literal in [RE2 syntax](https://github.com/google/re2/wiki/Syntax). It is compiled when the policy loads, so a bad pattern is a load error. RE2 has no backtracking, so matching time is linear in the length of `s` for any pattern: a policy cannot be made slow by a pathological regex.
 
 **Operators:**
 
@@ -117,12 +126,14 @@ The types are `string`, `int`, `bool`, `ip`, `list<string>` and `list<int>`. Act
 
 Lists appear only as the right side of `in`. Their elements must be literals of one type, so a list is fixed when the policy loads. Lists and `ip` values cannot be compared with `==`.
 
-**Rate limiting:** `rate_limit(key, limit, window)` is request-only and returns `bool`.
+**Rate limiting:** `rate_limit(key, limit, window)` or `rate_limit(key, limit, window, name)` is request-only and returns `bool`.
 
 - `key` is a string or an ip. `limit` is an int literal of at least 1. `window` is a duration literal from `"1s"` to `"24h"`.
 - It returns **true when the request is over the limit**. Each key gets a token bucket that holds `limit` tokens and refills `limit` per `window`. A request that finds a token takes it and gets `false`.
-- Each `rate_limit` call site has its own buckets.
-- The state is in memory and per proxy instance: two replicas each allow `limit`. It survives hot reloads as long as the call site's policy name, position, limit and window are unchanged. It is bounded: idle keys are evicted, and past the key limit the oldest-looking keys go first (see `internal/ratelimit`).
+- Each call site has its own buckets, identified by its position (`line:col`). With the optional `name`, a string literal of 1–64 characters, it is identified by name instead. Then editing the script elsewhere does not move it, and two calls with the same name, limit and window share buckets.
+- The state is in memory, in each proxy instance. With `instances: N` in the config, each instance enforces `ceil(limit / N)`, so together they approximate `limit` *when the load balancer in front spreads clients evenly*. The controller sets `N` from the Deployment's replica count. Changing `N` starts fresh buckets.
+- The state survives hot reloads while the call site's identity (policy name, position or name, effective limit, window) is unchanged.
+- It is bounded: idle keys are evicted, and past the key limit arbitrary keys go (see `internal/ratelimit`).
 
 ## 5. Actions
 

@@ -87,25 +87,32 @@ func upgradeType(h http.Header) string {
 //
 // Tunnels are tracked so a graceful shutdown waits for them (Handler.Drain).
 func (h *Handler) serveUpgrade(w http.ResponseWriter, rc *http.ResponseController, r *http.Request,
-	resp *http.Response, reqType, rid string) (int, string) {
+	resp *http.Response, reqType, rid string, st *reqState) (int, string) {
 	respType := upgradeType(resp.Header)
 	if reqType == "" || !strings.EqualFold(respType, reqType) {
 		_ = resp.Body.Close()
-		h.writeError(w, rc, http.StatusBadGateway, rid)
-		return http.StatusBadGateway, "upgrade_mismatch"
+		return h.upgradeFailed(w, rc, rid, st, "upgrade_mismatch")
 	}
 	backConn, ok := resp.Body.(io.ReadWriteCloser)
 	if !ok {
 		_ = resp.Body.Close()
-		h.writeError(w, rc, http.StatusBadGateway, rid)
-		return http.StatusBadGateway, "upgrade_body"
+		return h.upgradeFailed(w, rc, rid, st, "upgrade_body")
 	}
 	defer backConn.Close()
 
+	removeHopByHop(resp.Header)
+	resp.Header.Set("Connection", "Upgrade") // policies cannot touch these two (protected headers)
+	resp.Header.Set("Upgrade", respType)
+	addVia(resp.Header, resp.ProtoMajor, resp.ProtoMinor)
+	resp.Header.Set(HeaderRequestID, rid)
+	if !h.responsePhase(st, http.StatusSwitchingProtocols, resp.Header, rid) {
+		h.writeError(w, rc, http.StatusInternalServerError, rid)
+		return http.StatusInternalServerError, "policy_error"
+	}
+
 	conn, brw, err := rc.Hijack()
 	if err != nil { // e.g. HTTP/2 client: upgrades are an HTTP/1.1 feature
-		h.writeError(w, rc, http.StatusBadGateway, rid)
-		return http.StatusBadGateway, "upgrade_hijack"
+		return h.upgradeFailed(w, rc, rid, st, "upgrade_hijack")
 	}
 	defer conn.Close()
 	h.tunnels.add(conn, backConn)
@@ -125,11 +132,6 @@ func (h *Handler) serveUpgrade(w http.ResponseWriter, rc *http.ResponseControlle
 		}
 	}()
 
-	removeHopByHop(resp.Header)
-	resp.Header.Set("Connection", "Upgrade")
-	resp.Header.Set("Upgrade", respType)
-	addVia(resp.Header, resp.ProtoMajor, resp.ProtoMinor)
-	resp.Header.Set(HeaderRequestID, rid)
 	if _, err := brw.WriteString("HTTP/1.1 101 Switching Protocols\r\n"); err != nil {
 		return http.StatusSwitchingProtocols, "upgrade_write"
 	}
@@ -183,17 +185,15 @@ func wsAccept(key string) string {
 // client's request stream to the backend and the backend to the response
 // stream, flushing every chunk.
 func (h *Handler) serveExtendedConnect(w http.ResponseWriter, rc *http.ResponseController, r *http.Request,
-	resp *http.Response, key, rid string) (int, string) {
+	resp *http.Response, key, rid string, st *reqState) (int, string) {
 	if !strings.EqualFold(upgradeType(resp.Header), "websocket") || resp.Header.Get("Sec-WebSocket-Accept") != wsAccept(key) {
 		_ = resp.Body.Close()
-		h.writeError(w, rc, http.StatusBadGateway, rid)
-		return http.StatusBadGateway, "upgrade_mismatch"
+		return h.upgradeFailed(w, rc, rid, st, "upgrade_mismatch")
 	}
 	backConn, ok := resp.Body.(io.ReadWriteCloser)
 	if !ok {
 		_ = resp.Body.Close()
-		h.writeError(w, rc, http.StatusBadGateway, rid)
-		return http.StatusBadGateway, "upgrade_body"
+		return h.upgradeFailed(w, rc, rid, st, "upgrade_body")
 	}
 	defer backConn.Close()
 	h.tunnels.add(backConn, r.Body)
@@ -207,6 +207,11 @@ func (h *Handler) serveExtendedConnect(w http.ResponseWriter, rc *http.ResponseC
 	}
 	addVia(hdr, resp.ProtoMajor, resp.ProtoMinor)
 	hdr.Set(HeaderRequestID, rid)
+	if !h.responsePhase(st, http.StatusOK, hdr, rid) {
+		clear(hdr)
+		h.writeError(w, rc, http.StatusInternalServerError, rid)
+		return http.StatusInternalServerError, "policy_error"
+	}
 	w.WriteHeader(http.StatusOK)
 	if err := rc.Flush(); err != nil {
 		return http.StatusOK, "upgrade_write"

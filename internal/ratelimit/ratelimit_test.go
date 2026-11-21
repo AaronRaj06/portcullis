@@ -38,6 +38,18 @@ func TestBurstThenRefill(t *testing.T) {
 	}
 }
 
+func TestAllowBytesSharesBucketsAndDoesNotAllocate(t *testing.T) {
+	l := New(2, time.Hour, 0)
+	fixed(l)
+	key := []byte("10.0.0.1")
+	if !l.AllowBytes(key) || !l.Allow("10.0.0.1") || l.AllowBytes(key) {
+		t.Fatal("Allow and AllowBytes must share one bucket per key")
+	}
+	if n := testing.AllocsPerRun(100, func() { l.AllowBytes(key) }); n != 0 {
+		t.Fatalf("AllowBytes on a known key: %v allocs", n)
+	}
+}
+
 func TestKeysAreIndependent(t *testing.T) {
 	l := New(1, time.Minute, 0)
 	fixed(l)

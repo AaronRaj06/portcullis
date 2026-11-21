@@ -1,13 +1,17 @@
 package integration
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/AaronRaj06/portcullis/internal/config"
 	"github.com/AaronRaj06/portcullis/internal/proxy"
@@ -202,5 +206,65 @@ policies:
 	}
 	if _, body := do(t, "GET", base+"/v1/users?id=7", nil); body != "stable /api/v1/users policy=" {
 		t.Fatalf("rewrite: %q", body)
+	}
+}
+
+// The response phase also runs on errors the proxy makes itself and on upgrades.
+func TestResponsePhaseOnProxyErrorsAndUpgrades(t *testing.T) {
+	up := backend(t, func(w http.ResponseWriter, _ *http.Request) {
+		conn, brw, err := http.NewResponseController(w).Hijack()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_, _ = brw.WriteString("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: echo\r\nServer: leaky\r\n\r\n")
+		_ = brw.Flush()
+		_, _ = io.Copy(conn, brw)
+	})
+	_, base := policyProxy(t, fmt.Sprintf(`pools:
+  - {name: dead, backends: [{address: %q}], retries: {attempts: 0}}
+  - {name: ws, backends: [{address: %q}]}
+routes:
+  - {name: down, path: /down, backends: [{pool: dead}]}
+  - {name: ws, path: /ws, backends: [{pool: ws}]}
+policies:
+  - script: |
+      policy "errors" {
+        on response {
+          if response.status == 502 { set_header("retry-after", "5") }
+          if response.status == 101 { remove_header("server") set_header("x-tunnel", "ok") }
+        }
+      }
+`, deadAddr(t), strings.TrimPrefix(up.URL, "http://")))
+
+	resp, err := http.Get(base + "/down")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 502 || resp.Header.Get("Retry-After") != "5" || resp.Header.Get("Content-Type") != "application/json" {
+		t.Fatalf("proxy error: %d %v", resp.StatusCode, resp.Header)
+	}
+
+	conn, err := net.Dial("tcp", strings.TrimPrefix(base, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+	_, _ = io.WriteString(conn, "GET /ws HTTP/1.1\r\nHost: x\r\nConnection: Upgrade\r\nUpgrade: echo\r\n\r\n")
+	br := bufio.NewReader(conn)
+	ur, err := http.ReadResponse(br, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ur.Body.Close()
+	if ur.StatusCode != 101 || ur.Header.Get("X-Tunnel") != "ok" || ur.Header.Get("Server") != "" || ur.Header.Get("Upgrade") != "echo" {
+		t.Fatalf("upgrade: %d %v", ur.StatusCode, ur.Header)
+	}
+	_, _ = io.WriteString(conn, "ping")
+	buf := make([]byte, 4)
+	if _, err := io.ReadFull(br, buf); err != nil || string(buf) != "ping" {
+		t.Fatalf("tunnel after policy: %q %v", buf, err)
 	}
 }

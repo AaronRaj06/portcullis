@@ -374,7 +374,7 @@ func TestPolicyValidation(t *testing.T) {
   - {script: 'policy "b" { on request { if path { } } }'}
   - {script: 'policy "b" { on request { allow() } }'}
 `
-	err := mustParse(t, cfg).Validate()
+	err := mustParse(t, cfg+"instances: -2\n").Validate()
 	for _, want := range []string{
 		`policies[0].routes[0]: unknown route "nope"`,
 		`policies[0].onError: "maybe" is not fail_closed or fail_open`,
@@ -383,6 +383,7 @@ func TestPolicyValidation(t *testing.T) {
 		`policies[0].script: 1:36: unknown pool "missing"`,
 		`policies[2].script: 1:30: if condition must be bool, found string`,
 		`policies[3].script: duplicate policy name "b"`,
+		`instances: -2 is outside 1..1000`,
 	} {
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("missing %q in:\n%v", want, err)

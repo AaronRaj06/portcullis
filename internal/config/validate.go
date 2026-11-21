@@ -201,6 +201,9 @@ func (c *Config) Validate() error {
 const MaxPolicies = 64
 
 func (c *checker) policies(cfg *Config, pools, routes map[string]bool) {
+	if cfg.Instances < 1 || cfg.Instances > 1000 {
+		c.add("instances", "%d is outside 1..1000", cfg.Instances)
+	}
 	if len(cfg.Policies) > MaxPolicies {
 		c.add("policies", "%d policies, limit is %d", len(cfg.Policies), MaxPolicies)
 	}
@@ -223,7 +226,7 @@ func (c *checker) policies(cfg *Config, pools, routes map[string]bool) {
 			c.add(path+".timeout", "%v is outside 10µs..100ms", t)
 		}
 		// Rate limiters are not needed to check a script; Compile builds the real ones.
-		prog, err := compilePolicy(pc, pools, func(string, int, time.Duration) *ratelimit.Limiter { return nil })
+		prog, err := compilePolicy(pc, cfg.Instances, pools, func(string, int, time.Duration) *ratelimit.Limiter { return nil })
 		if err != nil {
 			var list policy.ErrorList
 			if errors.As(err, &list) {
@@ -242,10 +245,10 @@ func (c *checker) policies(cfg *Config, pools, routes map[string]bool) {
 	}
 }
 
-func compilePolicy(pc *Policy, pools map[string]bool, lim func(string, int, time.Duration) *ratelimit.Limiter) (*policy.Program, error) {
+func compilePolicy(pc *Policy, instances int, pools map[string]bool, lim func(string, int, time.Duration) *ratelimit.Limiter) (*policy.Program, error) {
 	return policy.Compile(pc.Script, policy.Options{
 		MaxSteps: pc.MaxSteps, Timeout: time.Duration(pc.Timeout), FailOpen: pc.OnError == "fail_open",
-		Pools: pools, Limiter: lim,
+		Share: instances, Pools: pools, Limiter: lim,
 	})
 }
 

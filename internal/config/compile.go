@@ -150,7 +150,7 @@ func compilePolicies(c *Config, pools map[string]*lb.Pool, prev *proxy.Snapshot)
 	byRoute := map[string][]*policy.Program{}
 	for i := range c.Policies {
 		pc := &c.Policies[i]
-		prog, err := compilePolicy(pc, names, lim)
+		prog, err := compilePolicy(pc, c.Instances, names, lim)
 		if err != nil { // Validate already compiled it, so this cannot happen
 			return nil, nil, fmt.Errorf("policies[%d]: %w", i, err)
 		}

@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/AaronRaj06/portcullis/internal/ratelimit"
 )
 
 const edgeRules = `
@@ -308,5 +310,63 @@ func TestLimits(t *testing.T) {
 	}
 	if _, err := Compile(strings.Repeat(" ", MaxSource+1), Options{}); err == nil {
 		t.Fatal("oversized source accepted")
+	}
+}
+
+func TestMatchesAndNow(t *testing.T) {
+	p := mustCompile(t, `policy "m" { on request {
+	  if path.matches("^/users/[0-9]+$") { tag("user") }
+	  if now() >= 1767225600 && now() < 1767229200 { deny(503, "maintenance") }
+	} }`)
+	e := env("GET", "/users/42", "")
+	e.Now = 1767225000 // before the window
+	if v, _ := p.EvalRequest(e); v.Kind != Continue || len(e.Tags) != 1 {
+		t.Fatalf("before window: %+v tags %v", v, e.Tags)
+	}
+	e = env("GET", "/users/abc", "")
+	e.Now = 1767226000
+	if v, _ := p.EvalRequest(e); v.Kind != Deny || len(e.Tags) != 0 {
+		t.Fatalf("in window: %+v tags %v", v, e.Tags)
+	}
+	if _, err := Compile(`policy "m" { on request { if path.matches("(") {} } }`, Options{}); err == nil ||
+		!strings.Contains(err.Error(), "1:43: invalid regular expression") {
+		t.Fatalf("bad regex: %v", err)
+	}
+}
+
+// TestRateLimitSites: a named limiter keeps its identity when the script moves,
+// and Share divides the limit between replicas.
+func TestRateLimitSites(t *testing.T) {
+	sites := map[string]int{}
+	o := Options{Share: 3, Limiter: func(site string, limit int, _ time.Duration) *ratelimit.Limiter {
+		sites[site] = limit
+		return ratelimit.New(limit, time.Hour, 0)
+	}}
+	for _, src := range []string{
+		`policy "p" { on request { if rate_limit(client.ip, 10, "1m", "login") { deny(429) } } }`,
+		`policy "p" { on request { tag("moved") if rate_limit(client.ip, 10, "1m", "login") { deny(429) } } }`,
+		`policy "p" { on request { if rate_limit(client.ip, 10, "1m") { deny(429) } } }`,
+	} {
+		if _, err := Compile(src, o); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// ceil(10/3) = 4 per replica; both named versions map to one site.
+	if len(sites) != 2 || sites["p@name:login/4/1m0s"] != 4 || sites["p@1:30/4/1m0s"] != 4 {
+		t.Fatalf("sites %v", sites)
+	}
+}
+
+func TestEnvReset(t *testing.T) {
+	p := mustCompile(t, `policy "q" { on request { if query("a") == "1" { tag("a") } } }`)
+	e := env("GET", "/", "")
+	e.RawQuery = "a=1"
+	_, _ = p.EvalRequest(e)
+	h := e.Header
+	e.Reset()
+	e.Header, e.RawQuery = h, "a=2"
+	_, _ = p.EvalRequest(e)
+	if len(e.Tags) != 0 {
+		t.Fatal("Reset must drop the cached query and old tags")
 	}
 }

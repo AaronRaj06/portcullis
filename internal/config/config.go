@@ -28,6 +28,9 @@ type Config struct {
 	Pools          []Pool   `json:"pools"`
 	Routes         []Route  `json:"routes"`
 	Policies       []Policy `json:"policies,omitempty"`
+	// Instances is how many proxy replicas share the traffic. Each divides
+	// every rate_limit by it, so together they approximate the global limit.
+	Instances int `json:"instances,omitempty"` // default 1
 }
 
 // Policy attaches a PolicyScript program (docs/POLICY_LANGUAGE.md) to routes.
@@ -220,6 +223,9 @@ func (c *Config) applyDefaults() {
 		if hc := p.HealthCheck; hc != nil {
 			fillHealth(hc)
 		}
+	}
+	if c.Instances == 0 {
+		c.Instances = 1
 	}
 	for i := range c.Policies {
 		if c.Policies[i].OnError == "" {

@@ -21,6 +21,9 @@ type Options struct {
 	MaxSteps int           // 0: DefaultMaxSteps
 	Timeout  time.Duration // 0: DefaultTimeout
 	FailOpen bool          // on a runtime error, skip the policy instead of answering 500
+	// Share divides every rate_limit by the number of proxy replicas that
+	// split the traffic (0 or 1: no division).
+	Share int
 	// Pools, if non-nil, is the set of valid route_to targets.
 	Pools map[string]bool
 	// Limiter returns the limiter for one rate_limit call site. site identifies
@@ -29,7 +32,7 @@ type Options struct {
 	Limiter func(site string, limit int, window time.Duration) *ratelimit.Limiter
 }
 
-func (o Options) limiter(site string, limit int, window time.Duration) allower {
+func (o Options) limiter(site string, limit int, window time.Duration) *ratelimit.Limiter {
 	if o.Limiter != nil {
 		return o.Limiter(site, limit, window)
 	}
@@ -85,6 +88,7 @@ type Env struct {
 	Path     string // updated by rewrite_path
 	RawQuery string
 	ClientIP netip.Addr
+	Now      int64 // request arrival, Unix seconds: what now() returns
 	// Header is the request header. In the request phase it is the outbound
 	// (upstream) header and set_header/remove_header change it.
 	Header http.Header
@@ -100,6 +104,9 @@ type Env struct {
 
 	query map[string][]string // parsed on first query(...)
 }
+
+// Reset clears e for reuse, keeping the capacity of its slices.
+func (e *Env) Reset() { *e = Env{Tags: e.Tags[:0], Logs: e.Logs[:0]} }
 
 // VerdictKind is how a request phase ended.
 type VerdictKind uint8

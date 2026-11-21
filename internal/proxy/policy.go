@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"sync"
 
 	"github.com/AaronRaj06/portcullis/internal/policy"
 )
@@ -42,6 +43,37 @@ func (h *Handler) requestPolicies(w http.ResponseWriter, rc *http.ResponseContro
 		}
 	}
 	return false
+}
+
+// envPool recycles policy environments: one per request on routes with policies.
+var envPool = sync.Pool{New: func() any { return new(policy.Env) }}
+
+// responsePhase lets the response policies see and change status/hdr before
+// the client does. false: a fail-closed policy failed, so the caller must
+// answer 500 instead.
+func (h *Handler) responsePhase(st *reqState, status int, hdr http.Header, rid string) bool {
+	if st.penv == nil {
+		return true
+	}
+	st.penv.Status, st.penv.RespHeader = status, hdr
+	return h.responsePolicies(st.progs, st.penv, rid, st)
+}
+
+// upstreamError answers a request that failed after routing (no backend,
+// upstream error or timeout, client body error), after the response policies
+// have seen it, so they can e.g. add Retry-After or Cache-Control to a 503.
+func (h *Handler) upstreamError(w http.ResponseWriter, rc *http.ResponseController, rid string, st *reqState) {
+	if !h.responsePhase(st, st.status, w.Header(), rid) {
+		clear(w.Header())
+		st.status, st.errKind = http.StatusInternalServerError, "policy_error"
+	}
+	h.writeError(w, rc, st.status, rid)
+}
+
+func (h *Handler) upgradeFailed(w http.ResponseWriter, rc *http.ResponseController, rid string, st *reqState, kind string) (int, string) {
+	st.status, st.errKind = http.StatusBadGateway, kind
+	h.upstreamError(w, rc, rid, st)
+	return st.status, st.errKind
 }
 
 // responsePolicies runs each policy's response handler. It returns false if

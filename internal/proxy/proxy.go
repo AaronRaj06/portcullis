@@ -101,7 +101,9 @@ type reqState struct {
 	status, attempts              int
 	panicked                      bool
 	written                       int64
-	tags                          []string // from policy tag(...)
+	tags                          []string          // from policy tag(...)
+	progs                         []*policy.Program // the route's policies, for the response phase
+	penv                          *policy.Env       // nil when the route has no policies
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -183,11 +185,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Policies see the request as the upstream will (the outbound headers),
 	// and may answer it, rewrite it or pick its pool (docs/POLICY_LANGUAGE.md).
-	var penv *policy.Env
 	var pool *lb.Pool
 	if len(route.Policies) > 0 {
-		penv = &policy.Env{Method: r.Method, Host: normalizeHost(r.Host), Path: tmpl.URL.Path,
-			RawQuery: tmpl.URL.RawQuery, ClientIP: clientIP, Header: tmpl.Header}
+		penv := envPool.Get().(*policy.Env)
+		defer func() { penv.Reset(); envPool.Put(penv) }() // runs before the access-log defer; nothing reads penv there
+		penv.Method, penv.Host, penv.Path, penv.RawQuery = r.Method, normalizeHost(r.Host), tmpl.URL.Path, tmpl.URL.RawQuery
+		penv.ClientIP, penv.Header, penv.Now = clientIP, tmpl.Header, start.Unix()
+		st.progs, st.penv = route.Policies, penv
 		if h.requestPolicies(w, rc, route.Policies, penv, rid, &st) {
 			return
 		}
@@ -232,7 +236,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if st.attempts == 0 { // otherwise keep the previous attempt's status
 				st.status, st.errKind = http.StatusServiceUnavailable, "no_backend"
 			}
-			h.writeError(w, rc, st.status, rid)
+			h.upstreamError(w, rc, rid, &st)
 			return
 		}
 		st.backend = b.Addr
@@ -249,13 +253,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			h.report(pool, b, gatewayFailure(resp.StatusCode), metrics.StatusClass(resp.StatusCode))
 			if resp.StatusCode == http.StatusSwitchingProtocols {
 				if extended {
-					st.status, st.errKind = h.serveExtendedConnect(w, rc, r, resp, wsKey, rid)
+					st.status, st.errKind = h.serveExtendedConnect(w, rc, r, resp, wsKey, rid, &st)
 				} else {
-					st.status, st.errKind = h.serveUpgrade(w, rc, r, resp, upgrade, rid)
+					st.status, st.errKind = h.serveUpgrade(w, rc, r, resp, upgrade, rid, &st)
 				}
 				return
 			}
-			h.serveResponse(w, rc, r, resp, ridVal, &st, route.Policies, penv)
+			h.serveResponse(w, rc, r, resp, ridVal, &st)
 			return
 		}
 		b.Release()
@@ -277,7 +281,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if st.status != statusClientClosed {
-			h.writeError(w, rc, st.status, rid)
+			h.upstreamError(w, rc, rid, &st)
 		}
 		return
 	}
@@ -313,7 +317,7 @@ func idempotent(m string) bool {
 }
 
 func (h *Handler) serveResponse(w http.ResponseWriter, rc *http.ResponseController, r *http.Request, resp *http.Response,
-	rid []string, st *reqState, progs []*policy.Program, penv *policy.Env) {
+	rid []string, st *reqState) {
 	defer resp.Body.Close()
 	st.status = resp.StatusCode
 	removeHopByHop(resp.Header)
@@ -323,10 +327,7 @@ func (h *Handler) serveResponse(w http.ResponseWriter, rc *http.ResponseControll
 	}
 	addVia(hdr, resp.ProtoMajor, resp.ProtoMinor)
 	hdr[HeaderRequestID] = rid // the same read-only slice sent upstream
-	if penv != nil {
-		penv.Status, penv.RespHeader = resp.StatusCode, hdr
-	}
-	if penv != nil && !h.responsePolicies(progs, penv, rid[0], st) {
+	if !h.responsePhase(st, resp.StatusCode, hdr, rid[0]) {
 		clear(hdr) // fail closed: none of the upstream response reaches the client
 		st.status, st.errKind = http.StatusInternalServerError, "policy_error"
 		h.writeError(w, rc, st.status, rid[0])

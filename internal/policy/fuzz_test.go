@@ -15,6 +15,7 @@ var seeds = []string{
 	`policy "e" { on request { if 2 in [1,2] && path.len() <= 10 { deny(400) } } } # comment`,
 	"policy \"f\" {\n// line comment\n on request { tag(\"a\\\"b\\\\c\\n\") ; } }",
 	`policy "g" { on request { if (((true))) {} } }`,
+	`policy "h" { on request { if path.matches("^/u/[0-9]+$") && now() > 0 && rate_limit(header("x"), 2, "1s", "n") { deny(429) } } on response { if response.status == 101 {} } }`,
 	`policy "" {}`, `policy "x" { on request { if a = b {} } }`, `"unterminated`, `policy "p" { on request { deny(99999999999999999999) } }`,
 }
 

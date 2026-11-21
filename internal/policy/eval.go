@@ -352,17 +352,23 @@ func (st *state) eval(n *node) (value, error) {
 		}
 		return b2v(x.i == 0), nil
 	case opRateLimit:
-		var key string
 		if n.kids[0].t == tyIP {
-			key = env.ClientIP.Unmap().String()
-		} else {
-			k, err := st.eval(n.kids[0])
-			if err != nil {
-				return value{}, err
-			}
-			key = k.s
+			var buf [64]byte // an address in text form fits, so a known client costs no allocation
+			return b2v(!n.lim.AllowBytes(env.ClientIP.Unmap().AppendTo(buf[:0]))), nil
 		}
-		return b2v(!n.lim.Allow(key)), nil
+		k, err := st.eval(n.kids[0])
+		if err != nil {
+			return value{}, err
+		}
+		return b2v(!n.lim.Allow(k.s)), nil
+	case opMatches:
+		x, err := st.eval(n.kids[0])
+		if err != nil {
+			return value{}, err
+		}
+		return b2v(n.re.MatchString(x.s)), nil
+	case opNow:
+		return value{i: env.Now}, nil
 	}
 	return value{}, st.fail(n, "internal error: cannot evaluate node")
 }

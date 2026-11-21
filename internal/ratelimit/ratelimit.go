@@ -30,7 +30,7 @@ type Limiter struct {
 
 type shard struct {
 	mu sync.Mutex
-	m  map[string]bucket
+	m  map[string]*bucket // pointers: an existing key updates in place, with no map write
 }
 
 type bucket struct {
@@ -49,33 +49,57 @@ func New(limit int, window time.Duration, maxKeys int) *Limiter {
 		maxShard: max(1, maxKeys/shards), seed: maphash.MakeSeed(), now: time.Now,
 	}
 	for i := range l.shard {
-		l.shard[i].m = map[string]bucket{}
+		l.shard[i].m = map[string]*bucket{}
 	}
 	return l
 }
 
 // Allow takes a token for key and reports whether one was available.
 func (l *Limiter) Allow(key string) bool {
-	now := l.now().UnixNano()
 	s := &l.shard[maphash.String(l.seed, key)&(shards-1)]
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	b, ok := s.m[key]
-	if !ok {
-		if len(s.m) >= l.maxShard {
-			l.evict(s, now)
-		}
-		b = bucket{tokens: l.limit, last: now}
-	} else if now > b.last {
+	b := s.m[key]
+	if b == nil {
+		b = l.insert(s, key)
+	}
+	return l.take(b)
+}
+
+// AllowBytes is Allow for a key in a byte slice. A key seen before costs no
+// allocation (the map lookup does not copy key); only a new key is copied.
+func (l *Limiter) AllowBytes(key []byte) bool {
+	s := &l.shard[maphash.Bytes(l.seed, key)&(shards-1)]
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	b := s.m[string(key)]
+	if b == nil {
+		b = l.insert(s, string(key))
+	}
+	return l.take(b)
+}
+
+func (l *Limiter) insert(s *shard, key string) *bucket {
+	now := l.now().UnixNano()
+	if len(s.m) >= l.maxShard {
+		l.evict(s, now)
+	}
+	b := &bucket{tokens: l.limit, last: now}
+	s.m[key] = b
+	return b
+}
+
+// take refills b for the time since its last use, then takes a token if there is one.
+func (l *Limiter) take(b *bucket) bool {
+	if now := l.now().UnixNano(); now > b.last {
 		b.tokens = min(l.limit, b.tokens+float64(now-b.last)*l.perNano)
 		b.last = now
 	}
-	allowed := b.tokens >= 1
-	if allowed {
-		b.tokens--
+	if b.tokens < 1 {
+		return false
 	}
-	s.m[key] = b
-	return allowed
+	b.tokens--
+	return true
 }
 
 // evict makes room in a full shard. First it drops keys idle long enough to be

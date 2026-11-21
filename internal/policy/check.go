@@ -4,10 +4,13 @@ import (
 	"fmt"
 	"net/http"
 	"net/netip"
+	"regexp"
 	"strings"
 	"time"
 
 	"golang.org/x/net/http/httpguts"
+
+	"github.com/AaronRaj06/portcullis/internal/ratelimit"
 )
 
 type typ uint8
@@ -62,6 +65,8 @@ const (
 	opOr
 	opNot
 	opRateLimit
+	opMatches // kids[0] matched against re
+	opNow
 	// statements
 	opIf
 	opDeny
@@ -86,11 +91,10 @@ type node struct {
 	strs      []string
 	ints      []int64
 	nets      []netip.Prefix
-	lim       allower
+	lim       *ratelimit.Limiter
+	re        *regexp.Regexp
 	p         pos
 }
-
-type allower interface{ Allow(key string) bool }
 
 // Headers a policy may not set or remove: changing them could desynchronise
 // how the proxy and the backend frame the request (request smuggling).
@@ -469,13 +473,18 @@ func (c *checker) call(cl *call) *node {
 		return n
 	case "rate_limit":
 		return c.rateLimit(cl)
+	case "now":
+		if !c.args(cl, 0, 0) {
+			return bad(cl.p)
+		}
+		return &node{op: opNow, t: tyInt, p: cl.p}
 	}
 	c.errorf(cl.p, "unknown function %q", cl.name)
 	return bad(cl.p)
 }
 
 func (c *checker) rateLimit(cl *call) *node {
-	if !c.requestOnly(cl) || !c.args(cl, 3, 0) {
+	if !c.requestOnly(cl) || !c.args(cl, 3, 1) {
 		return bad(cl.p)
 	}
 	key := c.expr(cl.args[0])
@@ -497,10 +506,25 @@ func (c *checker) rateLimit(cl *call) *node {
 			ok2 = false
 		}
 	}
+	// The call site names the limiter: by position, or by an explicit name so
+	// editing the script elsewhere does not move it (and reset its counters).
+	site := cl.p.String()
+	if len(cl.args) == 4 {
+		name, ok := c.strLit(cl.args[3], "rate_limit name")
+		if ok && (name == "" || len(name) > 64) {
+			c.errorf(cl.args[3].at(), "rate_limit name must be 1 to 64 characters")
+			ok = false
+		}
+		ok2 = ok2 && ok
+		site = "name:" + name
+	}
 	n := &node{op: opRateLimit, t: tyBool, kids: []*node{key}, p: cl.p}
 	if ok1 && ok2 {
-		site := fmt.Sprintf("%s@%s/%d/%s", c.name, cl.p, limit, window)
-		n.lim = c.o.limiter(site, int(limit), window)
+		// Each of Share replicas enforces its part, so together they approximate
+		// the global limit when the load balancer spreads clients evenly.
+		share := max(1, int64(c.o.Share))
+		limit = max(1, (limit+share-1)/share)
+		n.lim = c.o.limiter(fmt.Sprintf("%s@%s/%d/%s", c.name, site, limit, window), int(limit), window)
 	}
 	return n
 }
@@ -541,6 +565,21 @@ func (c *checker) method(cl *call) *node {
 	case "len":
 		n.op, n.t = opLen, tyInt
 		c.args(cl, 0, 0)
+	case "matches":
+		n.op, n.t = opMatches, tyBool
+		if !c.args(cl, 1, 0) {
+			return bad(cl.p)
+		}
+		pat, ok := c.strLit(cl.args[0], "matches pattern")
+		if !ok {
+			return bad(cl.p)
+		}
+		re, err := regexp.Compile(pat) // RE2: matching time is linear in the input, whatever the pattern
+		if err != nil {
+			c.errorf(cl.args[0].at(), "invalid regular expression: %v", err)
+			return bad(cl.p)
+		}
+		n.re = re
 	default:
 		c.errorf(cl.p, "string has no method %q", cl.name)
 		return bad(cl.p)

@@ -1,0 +1,18 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/AaronRaj06/portcullis/internal/proxy
+cpu: Apple M1
+BenchmarkHandler/metrics+retries-8         	  431323	      2673 ns/op	    1661 B/op	      18 allocs/op
+BenchmarkHandler/metrics+retries-8         	  449324	      3122 ns/op	    1663 B/op	      18 allocs/op
+BenchmarkHandler/metrics+retries-8         	  432774	      2747 ns/op	    1663 B/op	      18 allocs/op
+BenchmarkHandler/metrics+retries-8         	  439597	      2661 ns/op	    1663 B/op	      18 allocs/op
+BenchmarkHandler/metrics+retries-8         	  424660	      2621 ns/op	    1661 B/op	      18 allocs/op
+BenchmarkHandler/metrics+retries-8         	  457927	      2618 ns/op	    1661 B/op	      18 allocs/op
+BenchmarkHandler/metrics+retries+policy-8  	  363475	      3310 ns/op	    1681 B/op	      19 allocs/op
+BenchmarkHandler/metrics+retries+policy-8  	  365630	      3419 ns/op	    1682 B/op	      19 allocs/op
+BenchmarkHandler/metrics+retries+policy-8  	  369303	      3290 ns/op	    1681 B/op	      19 allocs/op
+BenchmarkHandler/metrics+retries+policy-8  	  350578	      3293 ns/op	    1681 B/op	      19 allocs/op
+BenchmarkHandler/metrics+retries+policy-8  	  367621	      3270 ns/op	    1681 B/op	      19 allocs/op
+BenchmarkHandler/metrics+retries+policy-8  	  365361	      3322 ns/op	    1683 B/op	      19 allocs/op
+PASS
+ok  	github.com/AaronRaj06/portcullis/internal/proxy	15.141s

@@ -157,6 +157,8 @@ Go micro-benchmarks, `go test -bench . -benchmem -count 6 ./internal/policy`. Me
 
 **Round 0 → 1.** The evaluation state escaped to the heap (576 bytes per evaluation) because it held a slice pointing into its own buffer. A fixed array plus a count keeps it on the stack (`go build -gcflags=-m` confirms it). The two allocations left in the main example are the client IP turned into a string for the rate-limit key, and the header value slice for `set_header`.
 
-**In the proxy** (`BenchmarkHandler/metrics+retries+policy`, `handler.txt`), attaching the main example takes the handler from **18 to 21 allocations** and from 1,664 to 1,891 bytes per request. The ns/op figures in that file come from the same busy host and are noisy (the `bare` case measured slower than `metrics`), so only the allocation counts are quoted.
+**In the proxy** (`BenchmarkHandler/metrics+retries+policy`, `handler.txt`), attaching the main example takes the handler from **18 to 21 allocations** and from 1,664 to 1,891 bytes per request.
+
+**Round 2 (ADR 0011).** A pooled `Env` and an allocation-free rate-limit lookup for known client IPs (`Limiter.AllowBytes`) bring the main example to **372 ns, 16 B, 1 allocation** (`eval-round2.txt`). In the handler, attaching it now costs **1 allocation**: 18 → 19 per request, 1,661 → 1,683 B (`handler-round1.txt`). The one left is `set_header`'s value slice; header values are slices in `net/http`. The ns/op figures in that file come from the same busy host and are noisy (the `bare` case measured slower than `metrics`), so only the allocation counts are quoted.
 
 **Fuzzing.** `FuzzCompile` (any input → compile → evaluate both phases with a 200-step budget; checks for no panic) and `FuzzLex` each ran 2 minutes clean: 4.9M and 4.7M executions (`fuzz.txt`).
