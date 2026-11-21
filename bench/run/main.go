@@ -396,7 +396,8 @@ func (h *harness) checkDisk() {
 	if err := syscall.Statfs(h.out, &st); err != nil {
 		return
 	}
-	if free := st.Bavail * uint64(st.Bsize); free < minFreeDisk {
+	if free := st.Bavail * uint64(st.Bsize); free < minFreeDisk { //nolint:gosec // Bsize is int64 on Linux but never negative
+
 		log.Fatalf("only %.1f GiB free on the results disk; stopping before Docker runs out of space", float64(free)/(1<<30))
 	}
 }
