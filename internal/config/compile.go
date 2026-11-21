@@ -12,7 +12,9 @@ import (
 
 	"github.com/AaronRaj06/portcullis/internal/health"
 	"github.com/AaronRaj06/portcullis/internal/lb"
+	"github.com/AaronRaj06/portcullis/internal/policy"
 	"github.com/AaronRaj06/portcullis/internal/proxy"
+	"github.com/AaronRaj06/portcullis/internal/ratelimit"
 )
 
 // Compiled is a validated config turned into live objects, not yet published.
@@ -39,7 +41,7 @@ func Compile(c *Config, l proxy.Limits, prev *proxy.Snapshot, reuse map[string]*
 	files := readFiles(c) // read once: the hash and the transports see the same bytes
 	old := map[string]*lb.Backend{}
 	if prev != nil {
-		for _, p := range prev.Router.Pools() {
+		for _, p := range prev.AllPools() {
 			for _, b := range p.Backends {
 				old[p.Name+"|"+b.Addr] = b
 			}
@@ -90,9 +92,15 @@ func Compile(c *Config, l proxy.Limits, prev *proxy.Snapshot, reuse map[string]*
 		pools[pc.Name] = p
 	}
 
+	progs, limiters, err := compilePolicies(c, pools, prev)
+	if err != nil {
+		return nil, err
+	}
+
 	routes := make([]proxy.Route, 0, len(c.Routes))
 	for _, rc := range c.Routes {
-		r := proxy.Route{Name: rc.Name, Hosts: rc.Hosts, Path: rc.Path, Exact: rc.PathType == "Exact", Methods: rc.Methods}
+		r := proxy.Route{Name: rc.Name, Hosts: rc.Hosts, Path: rc.Path, Exact: rc.PathType == "Exact", Methods: rc.Methods,
+			Policies: progs[rc.Name]}
 		for _, h := range rc.Headers {
 			r.Headers = append(r.Headers, proxy.HeaderMatch{Name: h.Name, Value: h.Value})
 		}
@@ -113,8 +121,50 @@ func Compile(c *Config, l proxy.Limits, prev *proxy.Snapshot, reuse map[string]*
 	for _, s := range c.TrustedProxies {
 		trusted = append(trusted, netip.MustParsePrefix(s).Masked()) // validated above
 	}
-	out.Snapshot = &proxy.Snapshot{Router: router, TrustedProxies: trusted, Version: c.Version, Hash: c.hashWith(files)}
+	out.Snapshot = &proxy.Snapshot{Router: router, TrustedProxies: trusted, Pools: pools, Limiters: limiters,
+		Version: c.Version, Hash: c.hashWith(files)}
 	return out, nil
+}
+
+// compilePolicies compiles every policy and returns them per route name, in
+// config order. Rate limiters whose call site is unchanged (same policy name,
+// position, limit and window) are taken from prev, so a reload does not reset
+// anyone's counters.
+func compilePolicies(c *Config, pools map[string]*lb.Pool, prev *proxy.Snapshot) (map[string][]*policy.Program, map[string]*ratelimit.Limiter, error) {
+	names := make(map[string]bool, len(pools))
+	for n := range pools {
+		names[n] = true
+	}
+	limiters := map[string]*ratelimit.Limiter{}
+	lim := func(site string, limit int, window time.Duration) *ratelimit.Limiter {
+		l := limiters[site]
+		if l == nil && prev != nil {
+			l = prev.Limiters[site]
+		}
+		if l == nil {
+			l = ratelimit.New(limit, window, 0)
+		}
+		limiters[site] = l
+		return l
+	}
+	byRoute := map[string][]*policy.Program{}
+	for i := range c.Policies {
+		pc := &c.Policies[i]
+		prog, err := compilePolicy(pc, names, lim)
+		if err != nil { // Validate already compiled it, so this cannot happen
+			return nil, nil, fmt.Errorf("policies[%d]: %w", i, err)
+		}
+		targets := pc.Routes
+		if len(targets) == 0 {
+			for _, r := range c.Routes {
+				targets = append(targets, r.Name)
+			}
+		}
+		for _, r := range targets {
+			byRoute[r] = append(byRoute[r], prog)
+		}
+	}
+	return byRoute, limiters, nil
 }
 
 func balancer(name, hashKey string, bs []*lb.Backend) (lb.Balancer, error) {

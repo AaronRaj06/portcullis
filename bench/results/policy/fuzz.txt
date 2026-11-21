@@ -1,0 +1,8 @@
+fuzz: elapsed: 2m0s, execs: 4945357 (12062/sec), new interesting: 30 (total: 186)
+fuzz: elapsed: 2m1s, execs: 4945357 (0/sec), new interesting: 30 (total: 186)
+PASS
+ok  	github.com/AaronRaj06/portcullis/internal/policy	121.571s
+fuzz: elapsed: 2m0s, execs: 4718012 (52469/sec), new interesting: 15 (total: 116)
+fuzz: elapsed: 2m0s, execs: 4718012 (0/sec), new interesting: 15 (total: 116)
+PASS
+ok  	github.com/AaronRaj06/portcullis/internal/policy	120.475s

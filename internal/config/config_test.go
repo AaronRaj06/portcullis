@@ -366,3 +366,47 @@ func TestPanicCanBeTurnedOff(t *testing.T) {
 		t.Fatal("explicit panic: false ignored")
 	}
 }
+
+func TestPolicyValidation(t *testing.T) {
+	cfg := minimal + `policies:
+  - {routes: [nope], onError: maybe, maxSteps: -1, timeout: 1s, script: 'policy "a" { on request { route_to("missing") } }'}
+  - {script: 'policy "b" { on request { deny(403) } }'}
+  - {script: 'policy "b" { on request { if path { } } }'}
+  - {script: 'policy "b" { on request { allow() } }'}
+`
+	err := mustParse(t, cfg).Validate()
+	for _, want := range []string{
+		`policies[0].routes[0]: unknown route "nope"`,
+		`policies[0].onError: "maybe" is not fail_closed or fail_open`,
+		`policies[0].maxSteps: -1 is outside 0..1000000`,
+		`policies[0].timeout: 1s is outside 10µs..100ms`,
+		`policies[0].script: 1:36: unknown pool "missing"`,
+		`policies[2].script: 1:30: if condition must be bool, found string`,
+		`policies[3].script: duplicate policy name "b"`,
+	} {
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("missing %q in:\n%v", want, err)
+		}
+	}
+}
+
+func TestPoliciesAttachToRoutes(t *testing.T) {
+	cfg := strings.Replace(minimal, "routes:\n", "routes:\n  - {name: api, path: /api, backends: [{pool: p}]}\n", 1) + `policies:
+  - {script: 'policy "all" { on request { tag("all") } }'}
+  - {routes: [api], script: 'policy "api" { on request { tag("api") } }'}
+`
+	c, err := Compile(mustParse(t, cfg), proxy.DefaultLimits, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string][]string{}
+	for _, name := range []string{"/api/x", "/"} {
+		r := c.Snapshot.Router.Match(httptest.NewRequest("GET", name, nil))
+		for _, p := range r.Policies {
+			got[r.Name] = append(got[r.Name], p.Name)
+		}
+	}
+	if strings.Join(got["api"], ",") != "all,api" || strings.Join(got["r"], ",") != "all" {
+		t.Fatalf("policies per route: %v", got)
+	}
+}

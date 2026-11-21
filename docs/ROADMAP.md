@@ -41,6 +41,14 @@ What is deferred, and why. Anything not finished is listed here, never presented
 - **Keep-alive-off hang in the harness.** Each vegeta worker hits exactly one 10 s timeout per run, against every target including the bare backend. The suspected cause is VM socket state between interleaved targets, but it has not been diagnosed. Next step: drain TIME_WAIT between targets (not only between scenarios) and compare `nstat` ListenDrops before and after.
 - **Portcullis tail latency under contention** (p99 8.7 ms vs NGINX 0.9 ms at 256 connections on one core). Worth a profile on a quiet host: scheduler and GC settings (`GOGC`, `GOMEMLIMIT`), and per-connection goroutine costs.
 
+## Deferred from Phase 5
+
+- **Rate limits are per instance.** N replicas allow N × limit. A shared limit needs an external store (non-goal: no extra services). ADR 0010.
+- **Editing a script above a `rate_limit` call moves its `line:col`** and resets that limiter on reload. Keying by an explicit name (`rate_limit("login", key, ...)`) would fix it if this becomes a problem.
+- **The response phase skips proxy-generated errors** (404, 502, 503, 504) and upgraded connections. It sees only real upstream responses.
+- **No regular expressions, no request body access and no clock built-in** in PolicyScript. Each is a deliberate omission for safety and speed. RE2 (`regexp`) would be safe (linear time) and is the likely first addition.
+- **About 3 extra allocations per request** when policies are attached: the `Env`, the client IP string for `rate_limit`, and `set_header`'s value slice.
+
 ## By design (not planned)
 
 - **Listeners and server timeouts need a restart** (ADR 0007). Changing a listen address means rebinding a socket; the server-level timeouts are fixed when `http.Server` is built. Everything that changes routing is live, and so is the TLS certificate.

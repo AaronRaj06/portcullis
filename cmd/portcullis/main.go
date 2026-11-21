@@ -132,7 +132,7 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	}
 	metrics.RegisterBackendHealth(reg, func() []*lb.Pool {
 		if s := h.Current(); s != nil {
-			return s.Router.Pools()
+			return s.AllPools()
 		}
 		return nil
 	})

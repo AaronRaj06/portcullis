@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -17,6 +18,8 @@ import (
 
 	"github.com/AaronRaj06/portcullis/internal/lb"
 	"github.com/AaronRaj06/portcullis/internal/metrics"
+	"github.com/AaronRaj06/portcullis/internal/policy"
+	"github.com/AaronRaj06/portcullis/internal/ratelimit"
 )
 
 // statusClientClosed is NGINX's convention for "the client went away first".
@@ -49,9 +52,26 @@ type Handler struct {
 type Snapshot struct {
 	Router         *Router
 	TrustedProxies []netip.Prefix
-	Version        string // set by whoever pushed it (e.g. the controller); may be empty
-	Hash           string // sha256 of the canonical config
-	Generation     uint64 // increments on every successful swap in this process
+	// Pools holds every configured pool by name, for route_to. A pool may be
+	// reachable only through a policy, so it is not necessarily in Router.
+	Pools map[string]*lb.Pool
+	// Limiters holds rate_limit state by call site, so a reload that keeps a
+	// call site unchanged keeps its counters (config.Compile hands them over).
+	Limiters   map[string]*ratelimit.Limiter
+	Version    string // set by whoever pushed it (e.g. the controller); may be empty
+	Hash       string // sha256 of the canonical config
+	Generation uint64 // increments on every successful swap in this process
+}
+
+// AllPools returns every pool: those used by routes, plus any only reachable via route_to.
+func (s *Snapshot) AllPools() []*lb.Pool {
+	ps := s.Router.Pools()
+	for _, p := range s.Pools {
+		if !slices.Contains(ps, p) {
+			ps = append(slices.Clip(ps), p)
+		}
+	}
+	return ps
 }
 
 // Swap publishes s for new requests and returns the previous snapshot.
@@ -81,6 +101,7 @@ type reqState struct {
 	status, attempts              int
 	panicked                      bool
 	written                       int64
+	tags                          []string // from policy tag(...)
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -99,8 +120,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// The original client: the peer itself, or behind trusted proxies the first
 	// untrusted address in X-Forwarded-For. Used for hashing and logs.
 	client := peerStr
-	if c := realClient(r.Header, peer, trustedNets); c != peer {
-		client = c.String()
+	clientIP := realClient(r.Header, peer, trustedNets)
+	if clientIP != peer {
+		client = clientIP.String()
 	}
 	rid := requestID(r.Header.Get(HeaderRequestID), trusted)
 	rc := http.NewResponseController(w)
@@ -124,7 +146,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			slog.String("route", st.route), slog.String("pool", st.pool), slog.String("backend", st.backend),
 			slog.Int("attempts", st.attempts), slog.Bool("panic", st.panicked),
 			slog.Int("status", st.status), slog.Int64("bytes", st.written), slog.Duration("duration", d),
-			slog.String("error", st.errKind))
+			slog.String("error", st.errKind), slog.Any("tags", st.tags))
 	}()
 
 	if limit := h.o.Limits.MaxBodyBytes; limit > 0 && r.ContentLength > limit {
@@ -152,17 +174,37 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	st.route = route.Name
-	pool := route.PickPool()
-	st.pool = pool.Name
-	if pool.Budget != nil {
-		pool.Budget.Deposit()
-	}
 
 	upgrade := upgradeType(r.Header)
 	if extended {
 		upgrade = "websocket"
 	}
 	tmpl, body, ridVal := h.outbound(w, r, rc, peerStr, trusted, rid, upgrade)
+
+	// Policies see the request as the upstream will (the outbound headers),
+	// and may answer it, rewrite it or pick its pool (docs/POLICY_LANGUAGE.md).
+	var penv *policy.Env
+	var pool *lb.Pool
+	if len(route.Policies) > 0 {
+		penv = &policy.Env{Method: r.Method, Host: normalizeHost(r.Host), Path: tmpl.URL.Path,
+			RawQuery: tmpl.URL.RawQuery, ClientIP: clientIP, Header: tmpl.Header}
+		if h.requestPolicies(w, rc, route.Policies, penv, rid, &st) {
+			return
+		}
+		if penv.Path != tmpl.URL.Path {
+			tmpl.URL.Path, tmpl.URL.RawPath = penv.Path, ""
+		}
+		if penv.RouteTo != "" {
+			pool = snap.Pools[penv.RouteTo] // validated at load: the pool exists
+		}
+	}
+	if pool == nil {
+		pool = route.PickPool()
+	}
+	st.pool = pool.Name
+	if pool.Budget != nil {
+		pool.Budget.Deposit()
+	}
 	var wsKey string
 	if extended {
 		wsKey = toHTTP1WebSocket(tmpl)
@@ -213,7 +255,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				}
 				return
 			}
-			h.serveResponse(w, rc, r, resp, ridVal, &st)
+			h.serveResponse(w, rc, r, resp, ridVal, &st, route.Policies, penv)
 			return
 		}
 		b.Release()
@@ -270,7 +312,8 @@ func idempotent(m string) bool {
 	return false
 }
 
-func (h *Handler) serveResponse(w http.ResponseWriter, rc *http.ResponseController, r *http.Request, resp *http.Response, rid []string, st *reqState) {
+func (h *Handler) serveResponse(w http.ResponseWriter, rc *http.ResponseController, r *http.Request, resp *http.Response,
+	rid []string, st *reqState, progs []*policy.Program, penv *policy.Env) {
 	defer resp.Body.Close()
 	st.status = resp.StatusCode
 	removeHopByHop(resp.Header)
@@ -280,6 +323,15 @@ func (h *Handler) serveResponse(w http.ResponseWriter, rc *http.ResponseControll
 	}
 	addVia(hdr, resp.ProtoMajor, resp.ProtoMinor)
 	hdr[HeaderRequestID] = rid // the same read-only slice sent upstream
+	if penv != nil {
+		penv.Status, penv.RespHeader = resp.StatusCode, hdr
+	}
+	if penv != nil && !h.responsePolicies(progs, penv, rid[0], st) {
+		clear(hdr) // fail closed: none of the upstream response reaches the client
+		st.status, st.errKind = http.StatusInternalServerError, "policy_error"
+		h.writeError(w, rc, st.status, rid[0])
+		return
+	}
 	h.extendWrite(rc)
 	w.WriteHeader(resp.StatusCode)
 
@@ -409,6 +461,10 @@ func (h *Handler) extendWrite(rc *http.ResponseController) {
 }
 
 func (h *Handler) writeError(w http.ResponseWriter, rc *http.ResponseController, status int, rid string) {
+	h.writeErrorMsg(w, rc, status, rid, http.StatusText(status))
+}
+
+func (h *Handler) writeErrorMsg(w http.ResponseWriter, rc *http.ResponseController, status int, rid, msg string) {
 	h.extendWrite(rc)
 	hdr := w.Header()
 	hdr.Set("Content-Type", "application/json")
@@ -417,7 +473,7 @@ func (h *Handler) writeError(w http.ResponseWriter, rc *http.ResponseController,
 	_ = json.NewEncoder(w).Encode(struct {
 		Error     string `json:"error"`
 		RequestID string `json:"request_id"`
-	}{http.StatusText(status), rid})
+	}{msg, rid})
 }
 
 // classify maps a RoundTrip error to a status code and a metrics label. The

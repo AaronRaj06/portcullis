@@ -1,0 +1,24 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/AaronRaj06/portcullis/internal/policy
+cpu: Apple M1
+BenchmarkEdgeRules-8    	 2226469	       548.8 ns/op	     608 B/op	       3 allocs/op
+BenchmarkEdgeRules-8    	 2421902	       512.7 ns/op	     608 B/op	       3 allocs/op
+BenchmarkEdgeRules-8    	 2467413	       499.7 ns/op	     608 B/op	       3 allocs/op
+BenchmarkEdgeRules-8    	 2493363	       499.6 ns/op	     608 B/op	       3 allocs/op
+BenchmarkEdgeRules-8    	 2164077	       518.1 ns/op	     608 B/op	       3 allocs/op
+BenchmarkEdgeRules-8    	 2448759	       489.1 ns/op	     608 B/op	       3 allocs/op
+BenchmarkSimpleDeny-8   	 5846520	       223.0 ns/op	     576 B/op	       1 allocs/op
+BenchmarkSimpleDeny-8   	 5849434	       202.8 ns/op	     576 B/op	       1 allocs/op
+BenchmarkSimpleDeny-8   	 5873112	       213.3 ns/op	     576 B/op	       1 allocs/op
+BenchmarkSimpleDeny-8   	 5512332	       207.0 ns/op	     576 B/op	       1 allocs/op
+BenchmarkSimpleDeny-8   	 5974471	       202.4 ns/op	     576 B/op	       1 allocs/op
+BenchmarkSimpleDeny-8   	 5943810	       209.3 ns/op	     576 B/op	       1 allocs/op
+BenchmarkCompile-8      	   71706	     16672 ns/op	   30142 B/op	     277 allocs/op
+BenchmarkCompile-8      	   65014	     17075 ns/op	   30142 B/op	     277 allocs/op
+BenchmarkCompile-8      	   72136	     16896 ns/op	   30142 B/op	     277 allocs/op
+BenchmarkCompile-8      	   71662	     17057 ns/op	   30142 B/op	     277 allocs/op
+BenchmarkCompile-8      	   69081	     19512 ns/op	   30143 B/op	     277 allocs/op
+BenchmarkCompile-8      	   71878	     16931 ns/op	   30142 B/op	     277 allocs/op
+PASS
+ok  	github.com/AaronRaj06/portcullis/internal/policy	22.317s

@@ -1,0 +1,24 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/AaronRaj06/portcullis/internal/policy
+cpu: Apple M1
+BenchmarkEdgeRules-8    	 2939760	       454.7 ns/op	      32 B/op	       2 allocs/op
+BenchmarkEdgeRules-8    	 2470082	       511.4 ns/op	      32 B/op	       2 allocs/op
+BenchmarkEdgeRules-8    	 2933547	       413.6 ns/op	      32 B/op	       2 allocs/op
+BenchmarkEdgeRules-8    	 2920992	       412.5 ns/op	      32 B/op	       2 allocs/op
+BenchmarkEdgeRules-8    	 2944932	       405.7 ns/op	      32 B/op	       2 allocs/op
+BenchmarkEdgeRules-8    	 2946086	       406.3 ns/op	      32 B/op	       2 allocs/op
+BenchmarkSimpleDeny-8   	 9034402	       129.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSimpleDeny-8   	10433221	       115.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSimpleDeny-8   	10524999	       114.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSimpleDeny-8   	10493454	       114.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSimpleDeny-8   	10553674	       116.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSimpleDeny-8   	 9211890	       115.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCompile-8      	   70772	     16921 ns/op	   30142 B/op	     277 allocs/op
+BenchmarkCompile-8      	   70820	     16795 ns/op	   30142 B/op	     277 allocs/op
+BenchmarkCompile-8      	   71881	     17122 ns/op	   30142 B/op	     277 allocs/op
+BenchmarkCompile-8      	   71474	     17170 ns/op	   30142 B/op	     277 allocs/op
+BenchmarkCompile-8      	   71776	     17517 ns/op	   30142 B/op	     277 allocs/op
+BenchmarkCompile-8      	   70088	     16865 ns/op	   30142 B/op	     277 allocs/op
+PASS
+ok  	github.com/AaronRaj06/portcullis/internal/policy	21.976s

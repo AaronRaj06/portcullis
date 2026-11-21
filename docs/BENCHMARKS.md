@@ -142,3 +142,21 @@ What this shows:
 - **The generator caps throughput** at about 13k req/s, so the maximum throughput of a single proxy core is not measured. CPU per request is.
 - **Loopback only.** No real network latency or packet loss, and no TLS in these runs.
 - **10-second runs.** Long enough for stable medians on a quiet host. Too short to show slow leaks or GC behaviour over minutes.
+
+## PolicyScript (Phase 5)
+
+Go micro-benchmarks, `go test -bench . -benchmem -count 6 ./internal/policy`. Medians of 6. Raw output: `bench/results/policy/`.
+
+| Benchmark | Round 0 | Round 1 |
+|---|--:|--:|
+| Spec's main example (`edge-rules`, 5 rules, passes all): ns/op | 506 | **413** |
+| … B/op, allocs/op | 608 B, 3 | **32 B, 2** |
+| One header comparison (the floor): ns/op | 208 | **116** |
+| … B/op, allocs/op | 576 B, 1 | **0 B, 0** |
+| Compile the main example | 17.0 µs, 277 allocs | 17.0 µs (unchanged) |
+
+**Round 0 → 1.** The evaluation state escaped to the heap (576 bytes per evaluation) because it held a slice pointing into its own buffer. A fixed array plus a count keeps it on the stack (`go build -gcflags=-m` confirms it). The two allocations left in the main example are the client IP turned into a string for the rate-limit key, and the header value slice for `set_header`.
+
+**In the proxy** (`BenchmarkHandler/metrics+retries+policy`, `handler.txt`), attaching the main example takes the handler from **18 to 21 allocations** and from 1,664 to 1,891 bytes per request. The ns/op figures in that file come from the same busy host and are noisy (the `bare` case measured slower than `metrics`), so only the allocation counts are quoted.
+
+**Fuzzing.** `FuzzCompile` (any input → compile → evaluate both phases with a 200-step budget; checks for no panic) and `FuzzLex` each ran 2 minutes clean: 4.9M and 4.7M executions (`fuzz.txt`).

@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/AaronRaj06/portcullis/internal/health"
+	"github.com/AaronRaj06/portcullis/internal/policy"
+	"github.com/AaronRaj06/portcullis/internal/ratelimit"
 )
 
 // ValidationError lists every problem found, each prefixed with its field path
@@ -188,10 +190,63 @@ func (c *Config) Validate() error {
 			v.add(path+".backends", "all weights are 0")
 		}
 	}
+	v.policies(c, pools, routes)
 	if len(v.problems) > 0 {
 		return &ValidationError{Problems: v.problems}
 	}
 	return nil
+}
+
+// MaxPolicies bounds the number of policies in one config.
+const MaxPolicies = 64
+
+func (c *checker) policies(cfg *Config, pools, routes map[string]bool) {
+	if len(cfg.Policies) > MaxPolicies {
+		c.add("policies", "%d policies, limit is %d", len(cfg.Policies), MaxPolicies)
+	}
+	names := map[string]bool{}
+	for i := range cfg.Policies {
+		pc := &cfg.Policies[i]
+		path := fmt.Sprintf("policies[%d]", i)
+		for j, r := range pc.Routes {
+			if !routes[r] {
+				c.add(fmt.Sprintf("%s.routes[%d]", path, j), "unknown route %q", r)
+			}
+		}
+		if pc.OnError != "fail_closed" && pc.OnError != "fail_open" {
+			c.add(path+".onError", "%q is not fail_closed or fail_open", pc.OnError)
+		}
+		if pc.MaxSteps < 0 || pc.MaxSteps > 1_000_000 {
+			c.add(path+".maxSteps", "%d is outside 0..1000000", pc.MaxSteps)
+		}
+		if t := time.Duration(pc.Timeout); t != 0 && (t < 10*time.Microsecond || t > 100*time.Millisecond) {
+			c.add(path+".timeout", "%v is outside 10µs..100ms", t)
+		}
+		// Rate limiters are not needed to check a script; Compile builds the real ones.
+		prog, err := compilePolicy(pc, pools, func(string, int, time.Duration) *ratelimit.Limiter { return nil })
+		if err != nil {
+			var list policy.ErrorList
+			if errors.As(err, &list) {
+				for _, e := range list {
+					c.add(path+".script", "%s", e.Error())
+				}
+			} else {
+				c.add(path+".script", "%v", err)
+			}
+			continue
+		}
+		if names[prog.Name] {
+			c.add(path+".script", "duplicate policy name %q", prog.Name)
+		}
+		names[prog.Name] = true
+	}
+}
+
+func compilePolicy(pc *Policy, pools map[string]bool, lim func(string, int, time.Duration) *ratelimit.Limiter) (*policy.Program, error) {
+	return policy.Compile(pc.Script, policy.Options{
+		MaxSteps: pc.MaxSteps, Timeout: time.Duration(pc.Timeout), FailOpen: pc.OnError == "fail_open",
+		Pools: pools, Limiter: lim,
+	})
 }
 
 func validHashKey(k string) bool {

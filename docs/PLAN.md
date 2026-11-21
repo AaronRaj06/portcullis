@@ -42,19 +42,19 @@ Task breakdown per phase. Each phase ends with: `go test -race ./...`, docs upda
 - [x] CLI flags converted to the same config path; end-to-end SIGHUP/PUT test through `run()`
 
 ## Phase 4: Benchmarks (v0.1.0)
-- [ ] Install wrk2 or vegeta, nginx
-- [ ] Harness: direct, Portcullis, `httputil.ReverseProxy`, NGINX; small/large bodies; keep-alive on/off; concurrency sweep; ≥3 runs, medians
-- [ ] p50/p95/p99, RPS, CPU, memory; failure-injection scenario
-- [ ] pprof; ≥2 optimisation rounds with before/after
-- [ ] `docs/BENCHMARKS.md`; tag v0.1.0
+- [x] Install wrk2 or vegeta, nginx
+- [x] Harness: direct, Portcullis, `httputil.ReverseProxy`, NGINX; small/large bodies; keep-alive on/off; concurrency sweep; ≥3 runs, medians
+- [x] p50/p95/p99, RPS, CPU, memory; failure-injection scenario
+- [x] pprof; ≥2 optimisation rounds with before/after
+- [x] `docs/BENCHMARKS.md`; tag v0.1.0
 
 ## Phase 5: PolicyScript
-- [ ] `docs/POLICY_LANGUAGE.md` first
-- [ ] Lexer, recursive-descent parser, type checker with `line:col` errors
-- [ ] Evaluator with step budget and time budget; fail-closed/fail-open
-- [ ] Built-ins and actions; sharded token-bucket rate limiter with idle eviction
-- [ ] Fuzz (lexer, parser) with seed corpus; property tests; benchmarks
-- [ ] Wire into request/response path; e2e test for admin lockdown, rate limit, canary
+- [x] `docs/POLICY_LANGUAGE.md` first
+- [x] Lexer, recursive-descent parser, type checker with `line:col` errors
+- [x] Evaluator with step budget and time budget; fail-closed/fail-open
+- [x] Built-ins and actions; sharded token-bucket rate limiter with idle eviction
+- [x] Fuzz (lexer, parser) with seed corpus; property tests; benchmarks
+- [x] Wire into request/response path; e2e test for admin lockdown, rate limit, canary
 
 ## Phase 6: Kubernetes control plane
 - [ ] Install kind; controller-runtime + gateway-api deps

@@ -212,3 +212,42 @@ A third issue was caught by design review before it shipped, and its regression 
 - **The benchmark filled the disk and broke Docker.** Storing every response body produced gigabytes, the VM's ext4 volume remounted read-only, and Docker would not start. The harness now never stores bodies, stops below 3 GiB free, and saves results after every run.
 - **A real bug found by a benchmark:** correlated health-check false positives (see question 5), now ADR 0009.
 - **The final run was on a busy machine.** Recording host load per run turned "the numbers look odd" into evidence. Even NGINX's p99 swung from 1.5 to 422 ms. Only the comparisons that held up are quoted, and the keep-alive-off hang is recorded as an open harness defect in the roadmap.
+
+## Phase 5: PolicyScript
+
+### Concepts, in plain language
+
+- **Lexer → parser → checker → interpreter.**
+  - The lexer cuts text into tokens (`if`, `"admin"`, `&&`).
+  - The parser arranges tokens into a tree by the grammar. *Recursive descent* means one function per grammar rule, each calling the next tighter rule, so operator precedence falls out of the call order.
+  - The checker walks the tree and proves the types line up before anything runs.
+  - The interpreter walks the checked tree for each request.
+- **Static type checking.** Errors like "comparing a string with an int" are found when the config is loaded, with `line:col`, not at 3 a.m. on a live request.
+- **Termination by construction.** With no loops, recursion or user functions, every program is a finite tree evaluated at most once per node. The step budget is a second fence, not the only one.
+- **Token bucket.** A bucket holds N tokens and refills N per window. Each request takes one. It allows short bursts while capping the average.
+- **Sharding.** Splitting one map + lock into 64, picked by key hash, so concurrent requests rarely wait on the same lock.
+- **Fail closed vs fail open.** When the policy itself breaks, either refuse the request (safe, less available) or skip the policy (available, less safe). Security rules should fail closed; cosmetic ones can fail open.
+- **Fuzzing.** Go's fuzzer mutates inputs to find ones that crash the code. Here it feeds random text through the whole pipeline.
+
+### Trade-offs and rejected alternatives
+
+- **Tree-walking interpreter vs bytecode VM.** A VM would be faster, but evaluation is already about 0.4 µs against a ~3 µs proxy core. The tree walker is easier to read, explain and audit (ADR 0010).
+- **Embedding Lua, Starlark or CEL.** The brief requires a hand-written language. Also, a general language would need sandboxing to guarantee termination and no I/O; ours cannot express those things in the first place.
+- **Atomic effects per policy.** Buffering header writes costs a little. In return, a budget breach halfway through can never leave a half-modified request.
+- **Literal-only lists.** CIDRs are parsed once at load time. Membership checks then never allocate, and a bad CIDR is a load error, not a runtime surprise.
+- **Rate-limit state keyed by call site, handed over on reload.** Otherwise every config push from the controller would reset everyone's counters, a free bypass.
+
+### Likely interview questions
+
+1. **How do you guarantee a policy can't hang the proxy?** There are three fences. The grammar has no loops, recursion or functions, so evaluation visits each node at most once. Programs are capped at 64 KiB and 10,000 nodes. At runtime there is a step budget (default 10,000) and a time budget (default 1 ms, checked every 64 steps). `FuzzCompile` ran 4.9M random programs through compile and evaluation without a panic.
+2. **What happens when a policy breaks at runtime?** Its effects are discarded, the error is counted (`portcullis_policy_errors_total`) and logged, and `onError` decides: `fail_closed` (default) answers 500, `fail_open` skips the policy and the next one still runs. Both are tested end to end (`TestPolicyBudgetFailClosedAndOpen`).
+3. **How is the rate limiter safe under concurrency, and how is memory bounded?** 64 shards, each a mutex plus map. A concurrency test with 32 goroutines checks that a 1,000-token bucket grants exactly 1,000 (±1 for refill). Each limiter holds at most 100k keys. A full shard first drops idle keys, which is invisible because a new key starts full, then an arbitrary eighth.
+4. **Could a policy enable request smuggling or header injection?** Framing headers (`Content-Length`, `Transfer-Encoding`, `Host`, …) are rejected when the policy loads. A computed header value or path containing CR, LF or NUL is a runtime error, so it never reaches the wire.
+5. **Does a hot reload reset rate limits?** No, as long as the call site is unchanged (same policy, position, limit and window): `config.Compile` reuses the previous snapshot's limiter, just as it reuses backend health. `TestPolicyExamplesEndToEnd` exhausts a client's bucket, reloads, and still gets 429.
+
+### What went wrong
+
+- **A nil-map panic in the response phase.** I built the request `Env` but forgot to set the response status and headers before running response policies, so the first `remove_header` crashed the request. The end-to-end test caught it immediately. The fix sets them in `serveResponse`, and the interpreter now creates a header map if a caller passes none.
+- **The evaluation state escaped to the heap.** It kept a slice pointing at its own array, which costs 576 bytes per request even for a one-line policy. A fixed array plus a count cut the floor from 208 ns and 1 allocation to 116 ns and 0 (`go build -gcflags=-m` shows it).
+- **A wall-clock budget is a flaky test oracle.** Under `-race` on a busy laptop, a 200-rule policy passed 1 ms of real time without exceeding its step budget. The step test now uses a generous timeout, and the time budget has its own test with a 1 ns limit, which must always fire.
+- **My own test expectations were wrong three times** (two `line:col` positions I counted by hand, one subtest whose backends shut down when it ended). Each time the code was right. Counting columns by hand is not a test; the tests now pin positions the parser reports, and I checked each one against the source by hand.

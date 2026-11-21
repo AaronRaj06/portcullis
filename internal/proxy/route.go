@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 
 	"github.com/AaronRaj06/portcullis/internal/lb"
+	"github.com/AaronRaj06/portcullis/internal/policy"
 )
 
 // HeaderMatch requires a request header to equal Value exactly (name is case-insensitive).
@@ -31,6 +32,8 @@ type Route struct {
 	Headers []HeaderMatch
 	Pool    *lb.Pool
 	Split   []WeightedPool
+	// Policies run in order on every request this route matches.
+	Policies []*policy.Program
 
 	// order is one smooth-weighted cycle of Split, walked with an atomic counter:
 	// exact proportions, interleaved, lock-free. A pool with no available
@@ -75,7 +78,7 @@ func NewRouter(routes []Route) (*Router, error) {
 		rp := &Route{ // copy: the router owns its routes
 			Name: routes[i].Name, Hosts: routes[i].Hosts, Path: routes[i].Path, Exact: routes[i].Exact,
 			Methods: routes[i].Methods, Headers: slices.Clone(routes[i].Headers),
-			Pool: routes[i].Pool, Split: routes[i].Split,
+			Pool: routes[i].Pool, Split: routes[i].Split, Policies: routes[i].Policies,
 		}
 		r := rp
 		if r.Name == "" || names[r.Name] {

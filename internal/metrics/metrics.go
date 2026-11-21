@@ -26,6 +26,8 @@ type Metrics struct {
 	gen       prometheus.Gauge
 	lastOK    prometheus.Gauge
 	inFlight  prometheus.Gauge
+	denials   *prometheus.CounterVec
+	polErrors *prometheus.CounterVec
 }
 
 // New creates the collectors and registers them on reg.
@@ -65,10 +67,25 @@ func New(reg prometheus.Registerer) *Metrics {
 		inFlight: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "portcullis_requests_in_flight", Help: "Requests currently being served.",
 		}),
+		denials: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "portcullis_policy_denials_total", Help: "Requests ended by a policy deny or redirect, by policy and status code.",
+		}, []string{"policy", "code"}),
+		polErrors: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "portcullis_policy_errors_total", Help: "Policy runtime errors (budget breaches, invalid values), by policy.",
+		}, []string{"policy"}),
 	}
-	reg.MustRegister(m.requests, m.duration, m.errors, m.attempts, m.retries, m.ejections, m.panics, m.reloads, m.gen, m.lastOK, m.inFlight)
+	reg.MustRegister(m.requests, m.duration, m.errors, m.attempts, m.retries, m.ejections, m.panics, m.reloads, m.gen, m.lastOK, m.inFlight,
+		m.denials, m.polErrors)
 	return m
 }
+
+// PolicyDenial counts a request ended by a policy's deny or redirect.
+func (m *Metrics) PolicyDenial(policy string, code int) {
+	m.denials.WithLabelValues(policy, strconv.Itoa(code)).Inc()
+}
+
+// PolicyError counts a policy runtime error.
+func (m *Metrics) PolicyError(policy string) { m.polErrors.WithLabelValues(policy).Inc() }
 
 // Start marks a request as in flight.
 func (m *Metrics) Start() { m.inFlight.Inc() }

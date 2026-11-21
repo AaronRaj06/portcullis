@@ -41,3 +41,24 @@ routes:
     pathType: Exact
     methods: [GET]
     backends: [{pool: web-stable}]
+
+# PolicyScript (docs/POLICY_LANGUAGE.md): runs on every request to the listed
+# routes (omit `routes` for all of them), in order.
+policies:
+  - routes: [web, cart]
+    onError: fail_closed           # a budget breach answers 500 (fail_open: skip the policy)
+    script: |
+      policy "edge-rules" {
+        on request {
+          if path.starts_with("/admin") && !(client.ip in ["10.0.0.0/8", "192.168.0.0/16"]) {
+            deny(403, "admin is internal only")
+          }
+          if header("user-agent").contains("sqlmap") { deny(403) }
+          if rate_limit(client.ip, 100, "1m") { deny(429) }
+          if header("x-canary") == "1" { route_to("web-canary") }
+          set_header("x-frame-options", "DENY")
+        }
+        on response {
+          remove_header("server")
+        }
+      }

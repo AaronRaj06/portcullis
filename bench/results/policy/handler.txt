@@ -1,0 +1,30 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/AaronRaj06/portcullis/internal/proxy
+cpu: Apple M1
+BenchmarkHandler/bare-8         	  248491	      4154 ns/op	    1667 B/op	      17 allocs/op
+BenchmarkHandler/bare-8         	  422389	      4221 ns/op	    1666 B/op	      17 allocs/op
+BenchmarkHandler/bare-8         	  333775	      5181 ns/op	    1665 B/op	      17 allocs/op
+BenchmarkHandler/bare-8         	  387324	      3044 ns/op	    1666 B/op	      17 allocs/op
+BenchmarkHandler/bare-8         	  413127	      3531 ns/op	    1667 B/op	      17 allocs/op
+BenchmarkHandler/bare-8         	  415885	      4159 ns/op	    1666 B/op	      17 allocs/op
+BenchmarkHandler/metrics-8      	  357906	      3533 ns/op	    1666 B/op	      18 allocs/op
+BenchmarkHandler/metrics-8      	  368616	      5674 ns/op	    1667 B/op	      18 allocs/op
+BenchmarkHandler/metrics-8      	  415962	      3436 ns/op	    1667 B/op	      18 allocs/op
+BenchmarkHandler/metrics-8      	  340531	      3576 ns/op	    1667 B/op	      18 allocs/op
+BenchmarkHandler/metrics-8      	  387940	      3231 ns/op	    1664 B/op	      18 allocs/op
+BenchmarkHandler/metrics-8      	  366780	      2973 ns/op	    1667 B/op	      18 allocs/op
+BenchmarkHandler/metrics+retries-8         	  379753	      2995 ns/op	    1665 B/op	      18 allocs/op
+BenchmarkHandler/metrics+retries-8         	  344480	      3355 ns/op	    1666 B/op	      18 allocs/op
+BenchmarkHandler/metrics+retries-8         	  419080	      2836 ns/op	    1666 B/op	      18 allocs/op
+BenchmarkHandler/metrics+retries-8         	  409848	      4046 ns/op	    1665 B/op	      18 allocs/op
+BenchmarkHandler/metrics+retries-8         	  371126	      2941 ns/op	    1666 B/op	      18 allocs/op
+BenchmarkHandler/metrics+retries-8         	  454099	      2778 ns/op	    1664 B/op	      18 allocs/op
+BenchmarkHandler/metrics+retries+policy-8  	  332954	      3626 ns/op	    1894 B/op	      21 allocs/op
+BenchmarkHandler/metrics+retries+policy-8  	  345448	      3891 ns/op	    1893 B/op	      21 allocs/op
+BenchmarkHandler/metrics+retries+policy-8  	  135172	     19187 ns/op	    1893 B/op	      21 allocs/op
+BenchmarkHandler/metrics+retries+policy-8  	  292672	      5725 ns/op	    1896 B/op	      21 allocs/op
+BenchmarkHandler/metrics+retries+policy-8  	  290455	      3611 ns/op	    1893 B/op	      21 allocs/op
+BenchmarkHandler/metrics+retries+policy-8  	  353691	      3449 ns/op	    1891 B/op	      21 allocs/op
+PASS
+ok  	github.com/AaronRaj06/portcullis/internal/proxy	40.934s

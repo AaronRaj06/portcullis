@@ -27,6 +27,16 @@ type Config struct {
 	TrustedProxies []string `json:"trustedProxies,omitempty"` // CIDRs
 	Pools          []Pool   `json:"pools"`
 	Routes         []Route  `json:"routes"`
+	Policies       []Policy `json:"policies,omitempty"`
+}
+
+// Policy attaches a PolicyScript program (docs/POLICY_LANGUAGE.md) to routes.
+type Policy struct {
+	Script   string   `json:"script"`
+	Routes   []string `json:"routes,omitempty"`   // omitted: every route
+	OnError  string   `json:"onError,omitempty"`  // fail_closed (default) or fail_open
+	MaxSteps int      `json:"maxSteps,omitempty"` // 0: policy.DefaultMaxSteps
+	Timeout  Duration `json:"timeout,omitempty"`  // 0: policy.DefaultTimeout
 }
 
 // Pool is a named group of backends.
@@ -209,6 +219,11 @@ func (c *Config) applyDefaults() {
 		}
 		if hc := p.HealthCheck; hc != nil {
 			fillHealth(hc)
+		}
+	}
+	for i := range c.Policies {
+		if c.Policies[i].OnError == "" {
+			c.Policies[i].OnError = "fail_closed"
 		}
 	}
 	for i := range c.Routes {
