@@ -217,6 +217,9 @@ func TestListenerHostnamesAndClasses(t *testing.T) {
 	if c := condition(t, g.Listeners[1].Conditions, "Accepted"); c.Reason != "UnsupportedProtocol" {
 		t.Fatalf("https listener: %+v", c)
 	}
+	if c := condition(t, g.Conditions, "Accepted"); c.Status != metav1.ConditionTrue || c.Reason != "ListenersNotValid" {
+		t.Fatalf("gateway with one bad listener: %+v", c)
+	}
 	if h := out.Config.Routes[0].Hosts; len(h) != 1 || h[0] != "a.example.com" {
 		t.Fatalf("hosts %v", h)
 	}

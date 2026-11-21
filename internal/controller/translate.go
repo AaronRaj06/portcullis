@@ -182,8 +182,11 @@ func (t *translator) gateway(g *gwv1.Gateway) {
 	}
 	ok := valid > 0
 	reason, msg := string(gwv1.GatewayReasonAccepted), ""
-	if !ok {
+	switch {
+	case !ok:
 		reason, msg = string(gwv1.GatewayReasonListenersNotValid), "no listener with protocol HTTP"
+	case valid < len(g.Spec.Listeners): // still Accepted, but the spec wants the reason to flag the bad listeners
+		reason, msg = string(gwv1.GatewayReasonListenersNotValid), "some listeners are not HTTP and were not accepted"
 	}
 	res.Conditions = []metav1.Condition{cond(string(gwv1.GatewayConditionAccepted), reason, ok, g.Generation, msg)}
 	t.out.Gateways[nsName(g)] = res

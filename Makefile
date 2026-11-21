@@ -16,7 +16,7 @@ KIND      := sigs.k8s.io/kind@v0.33.0
 VEGETA    := github.com/tsenart/vegeta/v12@v12.13.0
 export PATH := $(TOOLS_BIN):$(PATH)
 
-.PHONY: help all build test lint fmt vet staticcheck golangci vuln fuzz docker tools bench bench-quick demo e2e demo-down clean
+.PHONY: help all build test lint fmt vet staticcheck golangci vuln fuzz docker tools bench bench-quick demo e2e conformance demo-down clean
 
 tools: ## Install kind and vegeta into bin/tools (project-local)
 	GOBIN="$(TOOLS_BIN)" go install $(KIND)
@@ -68,6 +68,9 @@ demo: tools ## kind cluster with controller, data plane and a canary demo app (n
 
 e2e: ## End-to-end tests against the `make demo` cluster
 	go test -tags e2e -count=1 -v ./test/e2e
+
+conformance: ## Gateway API conformance (GATEWAY-HTTP, core) inside the `make demo` cluster
+	./deploy/conformance.sh
 
 demo-down: ## Delete the demo cluster
 	"$(TOOLS_BIN)/kind" delete cluster --name portcullis

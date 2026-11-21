@@ -64,6 +64,6 @@ Task breakdown per phase. Each phase ends with: `go test -race ./...`, docs upda
 - [x] Manifests with least-privilege RBAC; `make demo`; e2e test
 
 ## Phase 7: Polish (v0.2.0)
-- [ ] README with Mermaid diagram and benchmark table
-- [ ] Gateway API conformance run, honest table
-- [ ] `docs/SECURITY.md` threat model; asciinema demo script; `docs/RESUME_BULLETS.md`
+- [x] README with Mermaid diagram and benchmark table
+- [x] Gateway API conformance run, honest table (`docs/CONFORMANCE.md`)
+- [x] `docs/SECURITY.md` threat model; asciinema demo script (`deploy/record-demo.sh`); `docs/RESUME_BULLETS.md`
