@@ -1,0 +1,8 @@
+# One-node kind cluster for `make demo`. The proxy's NodePort 30080 is
+# published on the host as 127.0.0.1:18080.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      - {containerPort: 30080, hostPort: 18080, listenAddress: "127.0.0.1", protocol: TCP}

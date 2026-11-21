@@ -251,3 +251,51 @@ A third issue was caught by design review before it shipped, and its regression 
 - **The evaluation state escaped to the heap.** It kept a slice pointing at its own array, which costs 576 bytes per request even for a one-line policy. A fixed array plus a count cut the floor from 208 ns and 1 allocation to 116 ns and 0 (`go build -gcflags=-m` shows it).
 - **A wall-clock budget is a flaky test oracle.** Under `-race` on a busy laptop, a 200-rule policy passed 1 ms of real time without exceeding its step budget. The step test now uses a generous timeout, and the time budget has its own test with a 1 ns limit, which must always fire.
 - **My own test expectations were wrong three times** (two `line:col` positions I counted by hand, one subtest whose backends shut down when it ended). Each time the code was right. Counting columns by hand is not a test; the tests now pin positions the parser reports, and I checked each one against the source by hand.
+
+## Phase 6: Kubernetes control plane
+
+### Concepts, in plain language
+
+- **Control plane vs data plane.** The data plane (`portcullis`) moves bytes. The control plane (`portcullis-controller`) decides what the data plane should do and tells it. They are separate Deployments, so a controller crash never drops traffic: the data plane keeps serving its last config.
+- **Gateway API.** The Kubernetes-standard way to describe L7 routing.
+  - `GatewayClass` says which controller handles it.
+  - `Gateway` is a listener ("HTTP on port 80").
+  - `HTTPRoute` maps hostnames, paths, headers and methods to Services with weights.
+- **Reconcile loop.** Instead of reacting to each event ("pod X deleted"), the controller repeatedly asks "what should the world look like?", computes it from scratch and makes it so. That is *level-triggered*: missing an event cannot leave things wrong, because the next reconcile sees the full state.
+- **EndpointSlices.** Kubernetes' list of the actual pod IPs behind a Service, with readiness. Routing straight to pod IPs, instead of through the Service's virtual IP, lets Portcullis do its own load balancing, health tracking and retries.
+- **Status conditions.** How a controller reports back on objects it handles. `Accepted` means "I understood this"; `ResolvedRefs` means "every reference points at something real"; `Programmed` means "the data plane acknowledged it".
+- **CRD.** A custom resource definition teaches the API server a new object type, here `PortcullisPolicy`, so users manage policies with `kubectl` like anything else.
+- **Policy attachment.** The Gateway API pattern of attaching extra behaviour to a Gateway or route through a separate object with a `targetRef`.
+
+### Trade-offs and rejected alternatives
+
+- **Push vs pull.** The controller pushes snapshots to each data plane's admin API. The data plane needs no Kubernetes credentials and no client library, and the same API works outside Kubernetes. The cost is that the controller must find every data-plane pod, which it does through a headless Service with `publishNotReadyAddresses`.
+- **Full rebuild vs incremental updates.** A full rebuild is simple and always consistent. Incremental updates scale further but are easy to get wrong (ADR 0012).
+- **Reject vs approximate unsupported features.** A route with a regex match or a header filter is reported `PartiallyInvalid` and that rule is dropped, instead of being served without the filter.
+- **Generated PolicyScript for edge cases.** No valid backend → `deny(500)`; no ready endpoints → `deny(503)`. That reuses the policy engine instead of adding special cases to the data plane.
+- **controller-gen vs hand-written deep copies.** For three structs, hand-written copies with a test are cheaper than another tool in the build.
+
+### Likely interview questions
+
+1. **Walk me through what happens when I apply an HTTPRoute.** The watch fires, everything is listed and `Translate` turns it into one Portcullis config. The controller validates it with the data plane's own `config` package, versions it by its hash, and PUTs it to every data-plane pod. Each pod's reply must carry the same hash. Then the route gets `Accepted`, `ResolvedRefs` and `Programmed`.
+2. **A pod is deleted. How does traffic move?** The EndpointSlice drops the pod (it becomes `terminating`), the controller pushes a config without it, and the data plane swaps its snapshot atomically (Phase 3). Requests already sent to the pod finish. Meanwhile passive ejection and retries on connect failures cover the gap.
+3. **What if the controller is down?** Data planes keep serving their last config. A new data-plane pod stays unready (`-wait-for-config`), so it never receives traffic before it is programmed.
+4. **How do you keep a bad policy from breaking everything?** Each `PortcullisPolicy` is compiled alone with the data plane's parser. A bad one gets `Accepted=False, reason Invalid` with `line:col`, and is simply left out of the snapshot.
+5. **What permissions does each part have?**
+   - The controller can read Gateway API objects, policies, Services and EndpointSlices, write only their status, and use Leases in its namespace.
+   - The data plane has no Kubernetes token at all.
+   - A NetworkPolicy lets only the controller reach the admin port, which also requires a bearer token from a Secret generated at install.
+
+### Measured (`bench/results/evidence/phase6-demo-e2e.txt`)
+
+- **Canary 90/10:** 180/20 of 200 requests in `make demo`, and 450/50 of 500 in `make e2e`. That is exact, because each of the two data-plane replicas runs the same smooth-weighted cycle.
+- **Failover:** every v1 pod deleted under load. 200/200 requests at 10 req/s in the demo and 399/399 at 20 req/s in the e2e test returned 200, as traffic moved to v2 and back.
+- **Policy:** `/admin` → 403 with the policy's message. A deliberately broken `PortcullisPolicy` reported `Invalid` at `2:19` within seconds, while traffic and the valid policy were unaffected.
+
+### What went wrong
+
+- **`make tools` had always broken in a path with a space** ("Local Files"): `GOBIN=$(TOOLS_BIN)` was unquoted. Earlier phases never ran it from scratch. It is quoted now.
+- **`kind load docker-image` failed** with "content digest … not found". Docker Desktop's containerd image store keeps multi-platform image indexes, but only the local platform's layers. kind imports `--all-platforms` and trips on the missing ones. The demo now saves each image for the node's platform (`docker save --platform linux/arm64`) and loads that archive.
+- **Pods refused to start:** "runAsNonRoot and image has non-numeric user (nonroot)". The kubelet can only verify a numeric UID. The Dockerfile now says `USER 65532:65532`, and the manifests set `runAsUser` too.
+- **The controller image took 13 minutes to build** on a loaded laptop (client-go is large), and any doc edit would have rebuilt it. The Dockerfile now copies only `cmd/` and `internal/` and uses a build-cache mount.
+- **Go 1.27 became the minimum**, because controller-runtime v0.25 requires it. Recorded in ADR 0001's update; CI and the Docker image moved together.

@@ -53,6 +53,16 @@ All five gaps recorded at the end of Phase 5 are closed (ADR 0011):
 | No regex or clock | `s.matches("re")` (RE2, linear time), `now()` (fixed per request) |
 | 3 extra allocations with policies | 1: pooled `Env`, allocation-free `Limiter.AllowBytes` |
 
+## Deferred from Phase 6
+
+- **HTTPS listeners** (TLS termination programmed from the Gateway's `certificateRefs`): rejected with `UnsupportedProtocol`. The data plane already terminates TLS; the controller would need to mount Secrets and push certificate paths.
+- **ReferenceGrant**: cross-namespace `backendRefs` are refused (`RefNotPermitted`).
+- **HTTPRoute filters** (header modifiers, redirects, rewrites, mirrors), **regex and query-param matches**: those rules are dropped and the route marked `PartiallyInvalid`. Most filters map naturally onto generated PolicyScript, which is the likely way to add them.
+- **allowedRoutes namespace selectors**: treated as not allowed (needs Namespace objects in the translation).
+- **Partially invalid splits**: a share whose backend is invalid is dropped from the split instead of answering 500 for that share.
+- **Scale**: one full rebuild per change (ADR 0012). Per-Gateway work-queue keys and incremental pushes would be the next step.
+- **One data-plane fleet per controller**: every accepted Gateway is served by the same Deployment; no per-Gateway provisioning.
+
 ## By design (not planned)
 
 - **Policies cannot read request bodies** (ADR 0011). That would mean buffering bodies before forwarding, which the brief forbids.

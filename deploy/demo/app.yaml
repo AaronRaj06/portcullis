@@ -1,0 +1,94 @@
+# Demo: two versions of an app behind one Gateway, split 90/10, with a policy.
+apiVersion: v1
+kind: Namespace
+metadata: {name: demo}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: app, namespace: demo}
+data:
+  v1.conf: |
+    server { listen 8080; location / { default_type text/plain; return 200 "v1 $hostname\n"; } }
+  v2.conf: |
+    server { listen 8080; location / { default_type text/plain; return 200 "v2 $hostname\n"; } }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: app-v1, namespace: demo}
+spec:
+  replicas: 2
+  selector: {matchLabels: {app: app, version: v1}}
+  template:
+    metadata: {labels: {app: app, version: v1}}
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:1.27.5-alpine
+          imagePullPolicy: IfNotPresent
+          ports: [{name: http, containerPort: 8080}]
+          readinessProbe: {httpGet: {path: /, port: http}, periodSeconds: 1}
+          volumeMounts: [{name: conf, mountPath: /etc/nginx/conf.d/default.conf, subPath: v1.conf}]
+      volumes: [{name: conf, configMap: {name: app}}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: app-v2, namespace: demo}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: app, version: v2}}
+  template:
+    metadata: {labels: {app: app, version: v2}}
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:1.27.5-alpine
+          imagePullPolicy: IfNotPresent
+          ports: [{name: http, containerPort: 8080}]
+          readinessProbe: {httpGet: {path: /, port: http}, periodSeconds: 1}
+          volumeMounts: [{name: conf, mountPath: /etc/nginx/conf.d/default.conf, subPath: v2.conf}]
+      volumes: [{name: conf, configMap: {name: app}}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: app-v1, namespace: demo}
+spec:
+  selector: {app: app, version: v1}
+  ports: [{name: http, port: 80, targetPort: http}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: app-v2, namespace: demo}
+spec:
+  selector: {app: app, version: v2}
+  ports: [{name: http, port: 80, targetPort: http}]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata: {name: gw, namespace: demo}
+spec:
+  gatewayClassName: portcullis
+  listeners:
+    - {name: http, protocol: HTTP, port: 80}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: app, namespace: demo}
+spec:
+  parentRefs: [{name: gw}]
+  rules:
+    - backendRefs:
+        - {name: app-v1, port: 80, weight: 90}
+        - {name: app-v2, port: 80, weight: 10}
+---
+apiVersion: portcullis.dev/v1alpha1
+kind: PortcullisPolicy
+metadata: {name: block-admin, namespace: demo}
+spec:
+  targetRef: {group: gateway.networking.k8s.io, kind: HTTPRoute, name: app}
+  script: |
+    policy "block-admin" {
+      on request {
+        if path.starts_with("/admin") { deny(403, "admin is blocked by policy") }
+        set_header("x-served-by", "portcullis")
+      }
+    }

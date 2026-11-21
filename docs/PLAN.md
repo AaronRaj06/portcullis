@@ -57,11 +57,11 @@ Task breakdown per phase. Each phase ends with: `go test -race ./...`, docs upda
 - [x] Wire into request/response path; e2e test for admin lockdown, rate limit, canary
 
 ## Phase 6: Kubernetes control plane
-- [ ] Install kind; controller-runtime + gateway-api deps
-- [ ] Reconcile GatewayClass, Gateway, HTTPRoute; EndpointSlice resolution
-- [ ] Snapshot translation, push with ack and backoff; status conditions
-- [ ] `PortcullisPolicy` CRD with validation in status
-- [ ] Manifests with least-privilege RBAC; `make demo`; e2e test
+- [x] Install kind; controller-runtime + gateway-api deps
+- [x] Reconcile GatewayClass, Gateway, HTTPRoute; EndpointSlice resolution
+- [x] Snapshot translation, push with ack and backoff; status conditions
+- [x] `PortcullisPolicy` CRD with validation in status
+- [x] Manifests with least-privilege RBAC; `make demo`; e2e test
 
 ## Phase 7: Polish (v0.2.0)
 - [ ] README with Mermaid diagram and benchmark table

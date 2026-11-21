@@ -30,3 +30,7 @@ The first GitHub Actions run failed `govulncheck`: `setup-go` read `go 1.26.0` f
 - CI installs `1.26.x` (newest patch) instead of reading the minimum from `go.mod`.
 
 Lesson: the `go` line is a *minimum*, and CI should test what users actually build with (the newest patch), not the floor.
+
+## Update (Phase 6): Go 1.27
+
+Adding `sigs.k8s.io/controller-runtime v0.25.3` (with `k8s.io/* v0.37`) raised the minimum to **Go 1.27**. The same reasoning applies as for client_golang: accept the newer minimum rather than pin older Kubernetes libraries. `go.mod` says `go 1.27.0` with `toolchain go1.27.4` (the installed version). CI installs `1.27.x`, and the Docker build stage uses `golang:1.27`.

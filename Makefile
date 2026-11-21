@@ -16,11 +16,11 @@ KIND      := sigs.k8s.io/kind@v0.33.0
 VEGETA    := github.com/tsenart/vegeta/v12@v12.13.0
 export PATH := $(TOOLS_BIN):$(PATH)
 
-.PHONY: help all build test lint fmt vet staticcheck golangci vuln fuzz docker tools bench bench-quick clean
+.PHONY: help all build test lint fmt vet staticcheck golangci vuln fuzz docker tools bench bench-quick demo e2e demo-down clean
 
 tools: ## Install kind and vegeta into bin/tools (project-local)
-	GOBIN=$(TOOLS_BIN) go install $(KIND)
-	GOBIN=$(TOOLS_BIN) go install $(VEGETA)
+	GOBIN="$(TOOLS_BIN)" go install $(KIND)
+	GOBIN="$(TOOLS_BIN)" go install $(VEGETA)
 
 
 help: ## Show targets
@@ -62,6 +62,15 @@ fuzz: ## Run every Fuzz* target for FUZZTIME each (smoke test)
 
 docker: ## Build both container images
 	@for b in $(BINARIES); do docker build -f deploy/Dockerfile --build-arg BIN=$$b --build-arg VERSION=$(VERSION) -t $$b:$(VERSION) . || exit 1; done
+
+demo: tools ## kind cluster with controller, data plane and a canary demo app (needs Docker)
+	./deploy/demo.sh
+
+e2e: ## End-to-end tests against the `make demo` cluster
+	go test -tags e2e -count=1 -v ./test/e2e
+
+demo-down: ## Delete the demo cluster
+	"$(TOOLS_BIN)/kind" delete cluster --name portcullis
 
 bench: tools ## Full load-test matrix in Docker (about 30 min); results in bench/results/<time>
 	go run ./bench/run $(BENCH_ARGS)

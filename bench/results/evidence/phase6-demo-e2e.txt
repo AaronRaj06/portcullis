@@ -1,0 +1,31 @@
+# make demo + make e2e, 2026-11-21, kind v0.33.0, Server Version: v1.37.0
+
+## make demo (summary)
+== canary: 200 requests
+ 180 v1
+  20 v2
+
+== policy: GET /admin
+{"error":"admin is blocked by policy","request_id":"1257cc1397cb207400469747cb1fc5a1"}
+ (HTTP 403)
+
+== failover: delete every v1 pod while sending 10 req/s for 20 s
+pod "app-v1-7dd47b68c5-99rr4" deleted from demo namespace
+pod "app-v1-7dd47b68c5-pwcsb" deleted from demo namespace
+ 200 200
+
+Done. Try: curl http://127.0.0.1:18080/   |   make e2e   |   bin/tools/kind delete cluster --name portcullis
+
+## make e2e
+=== RUN   TestCanarySplit
+    e2e_test.go:66: 500 requests: map[v1:450 v2:50]
+--- PASS: TestCanarySplit (0.62s)
+=== RUN   TestPolicyBlocksPath
+--- PASS: TestPolicyBlocksPath (0.38s)
+=== RUN   TestInvalidPolicyIsReportedAndIgnored
+--- PASS: TestInvalidPolicyIsReportedAndIgnored (0.28s)
+=== RUN   TestFailoverWhenPodsDeleted
+    e2e_test.go:147: failover: 399 requests, map[200:399]
+--- PASS: TestFailoverWhenPodsDeleted (20.31s)
+PASS
+ok  	github.com/AaronRaj06/portcullis/test/e2e	22.692s

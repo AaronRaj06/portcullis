@@ -1,0 +1,162 @@
+# Portcullis control plane and data plane as separate Deployments.
+# The admin token Secret (portcullis-admin-token, key "token") is created by
+# deploy/demo.sh, so no credential is committed.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: portcullis-system
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: portcullis
+spec:
+  controllerName: portcullis.dev/gateway-controller
+---
+# ---------------------------------------------------------------- controller
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: portcullis-controller, namespace: portcullis-system}
+---
+# Least privilege: read what it translates, write only status subresources.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: {name: portcullis-controller}
+rules:
+  - apiGroups: [gateway.networking.k8s.io]
+    resources: [gatewayclasses, gateways, httproutes]
+    verbs: [get, list, watch]
+  - apiGroups: [gateway.networking.k8s.io]
+    resources: [gatewayclasses/status, gateways/status, httproutes/status]
+    verbs: [update]
+  - apiGroups: [portcullis.dev]
+    resources: [portcullispolicies]
+    verbs: [get, list, watch]
+  - apiGroups: [portcullis.dev]
+    resources: [portcullispolicies/status]
+    verbs: [update]
+  - apiGroups: [""]
+    resources: [services]
+    verbs: [get, list, watch]
+  - apiGroups: [discovery.k8s.io]
+    resources: [endpointslices]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: {name: portcullis-controller}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: portcullis-controller}
+subjects: [{kind: ServiceAccount, name: portcullis-controller, namespace: portcullis-system}]
+---
+# Leader election, in its own namespace only.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: portcullis-controller-leader, namespace: portcullis-system}
+rules:
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [get, create, update]
+  - apiGroups: ["", events.k8s.io]
+    resources: [events]
+    verbs: [create, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: portcullis-controller-leader, namespace: portcullis-system}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: portcullis-controller-leader}
+subjects: [{kind: ServiceAccount, name: portcullis-controller, namespace: portcullis-system}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: portcullis-controller, namespace: portcullis-system}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: portcullis-controller}}
+  template:
+    metadata: {labels: {app: portcullis-controller}}
+    spec:
+      serviceAccountName: portcullis-controller
+      securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: controller
+          image: portcullis-controller:dev
+          imagePullPolicy: IfNotPresent
+          args:
+            - -dataplane-admin-service=portcullis-system/portcullis-admin
+            - -dataplane-service=portcullis-system/portcullis
+            - -admin-token-file=/var/run/portcullis/token
+          ports: [{name: metrics, containerPort: 8081}, {name: probes, containerPort: 8082}]
+          livenessProbe: {httpGet: {path: /healthz, port: probes}}
+          readinessProbe: {httpGet: {path: /readyz, port: probes}}
+          resources: {requests: {cpu: 50m, memory: 64Mi}, limits: {memory: 256Mi}}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          volumeMounts: [{name: token, mountPath: /var/run/portcullis, readOnly: true}]
+      volumes: [{name: token, secret: {secretName: portcullis-admin-token}}]
+---
+# ---------------------------------------------------------------- data plane
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: portcullis, namespace: portcullis-system}
+automountServiceAccountToken: false # the data plane never talks to the API server
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: portcullis, namespace: portcullis-system}
+spec:
+  replicas: 2
+  selector: {matchLabels: {app: portcullis}}
+  template:
+    metadata: {labels: {app: portcullis}}
+    spec:
+      serviceAccountName: portcullis
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 40 # > -drain-timeout
+      securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: portcullis
+          image: portcullis:dev
+          imagePullPolicy: IfNotPresent
+          args:
+            - -wait-for-config
+            - -listen=:8080
+            - -admin-listen=:9901
+            - -admin-token-file=/var/run/portcullis/token
+            - -log-level=warn
+          ports: [{name: http, containerPort: 8080}, {name: admin, containerPort: 9901}]
+          readinessProbe: {httpGet: {path: /readyz, port: admin}, periodSeconds: 2}
+          livenessProbe: {httpGet: {path: /healthz, port: admin}}
+          resources: {requests: {cpu: 100m, memory: 64Mi}, limits: {memory: 256Mi}}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          volumeMounts: [{name: token, mountPath: /var/run/portcullis, readOnly: true}]
+      volumes: [{name: token, secret: {secretName: portcullis-admin-token}}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: portcullis, namespace: portcullis-system}
+spec:
+  type: NodePort
+  selector: {app: portcullis}
+  ports: [{name: http, port: 80, targetPort: http, nodePort: 30080}]
+---
+# How the controller finds every data-plane pod, ready or not: a new pod is
+# unready until it receives its first config.
+apiVersion: v1
+kind: Service
+metadata: {name: portcullis-admin, namespace: portcullis-system}
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector: {app: portcullis}
+  ports: [{name: admin, port: 9901, targetPort: admin}]
+---
+# Only the controller may reach the data-plane admin port (enforced if the CNI supports NetworkPolicy).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: portcullis-admin, namespace: portcullis-system}
+spec:
+  podSelector: {matchLabels: {app: portcullis}}
+  policyTypes: [Ingress]
+  ingress:
+    - ports: [{port: 8080}]
+    - from: [{podSelector: {matchLabels: {app: portcullis-controller}}}]
+      ports: [{port: 9901}]

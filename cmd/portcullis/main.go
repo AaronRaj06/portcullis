@@ -53,6 +53,7 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	l := proxy.DefaultLimits
 	var (
 		configFile = fs.String("config", "", "traffic config file (YAML or JSON); reloaded on SIGHUP")
+		waitConfig = fs.Bool("wait-for-config", false, "start with no config (503s, /readyz failing) until one is pushed to PUT /config, as the controller does")
 		// -tls-cert/-tls-key are also re-read on SIGHUP (certificate rotation).
 		listen      = fs.String("listen", ":8080", "proxy listen address")
 		adminListen = fs.String("admin-listen", "127.0.0.1:9901", "admin listen address")
@@ -100,8 +101,8 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	}
 	logger := slog.New(slog.NewJSONHandler(stdout, &slog.HandlerOptions{Level: lvl}))
 
-	if (*configFile == "") == (*upstream == "") {
-		return errors.New("give exactly one of -config or -upstream")
+	if n := btoi(*configFile != "") + btoi(*upstream != "") + btoi(*waitConfig); n != 1 {
+		return errors.New("give exactly one of -config, -upstream or -wait-for-config")
 	}
 	var tlsCfg *tls.Config
 	var certs *proxy.CertReloader
@@ -144,7 +145,7 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 		if _, err := mgr.Reload(); err != nil {
 			return fmt.Errorf("-config: %w", err)
 		}
-	} else {
+	} else if *upstream != "" {
 		c, err := flagsConfig(*upstream, *upstreamCA, *algo, *hashKey, *healthPath, *healthIntv,
 			*ejectAfter, *ejectFor, *maxEject, *panicMode, *retries, *budget, *trusted)
 		if err != nil {
@@ -276,4 +277,11 @@ func flagsConfig(upstreams, ca, algo, hashKey, healthPath string, healthIntv tim
 		}
 	}
 	return c, nil
+}
+
+func btoi(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
