@@ -1,5 +1,10 @@
 # Portcullis
 
+[![ci](https://github.com/AaronRaj06/portcullis/actions/workflows/ci.yml/badge.svg)](https://github.com/AaronRaj06/portcullis/actions/workflows/ci.yml)
+[![Gateway API conformance](https://img.shields.io/badge/Gateway%20API%20v1.7.0-40%2F40%20core%20tests-brightgreen)](docs/CONFORMANCE.md)
+[![Go](https://img.shields.io/badge/go-1.27-00ADD8)](go.mod)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+
 **An L7 reverse proxy, a safe policy language, and a Kubernetes Gateway API controller, written from scratch in Go. Every number in this README is measured, and every gap is written down.**
 
 - **`portcullis`**, the *data plane*: a reverse proxy and load balancer. It has hand-written load balancing, health checks, budgeted retries, WebSockets, HTTP/2, TLS and atomic hot reload.
@@ -119,3 +124,7 @@ All ADRs are in [docs/adr/](docs/adr/). The threat model is [docs/SECURITY.md](d
 | `deploy/` | Dockerfile, kind config, manifests, demo and conformance scripts |
 | `test/{integration,e2e,conformance}` | tests that span packages or need a cluster |
 | `docs/` | design, ADRs, policy language, benchmarks, security, conformance, interview notes |
+
+## License
+
+MIT, see [LICENSE](LICENSE).
