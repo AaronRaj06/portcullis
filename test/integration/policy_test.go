@@ -92,6 +92,14 @@ func TestPolicyExamplesEndToEnd(t *testing.T) {
 		}
 	})
 
+	t.Run("admin lockdown cannot be dodged by the path's spelling", func(t *testing.T) {
+		for _, p := range []string{"//admin", "/x/../admin", "/./admin", "/x%2F..%2Fadmin", "/%61dmin"} {
+			if code, body := do(t, "GET", base+p, from("203.0.113.5")); code != 403 {
+				t.Errorf("%s: %d %s", p, code, body)
+			}
+		}
+	})
+
 	t.Run("rate limit per client, kept across reload", func(t *testing.T) {
 		for i := range 5 {
 			if code, _ := do(t, "GET", base+"/api/x", from("198.51.100.1")); code != 200 {

@@ -50,9 +50,14 @@ func smoothSequence(bs []*Backend, w []int) []*Backend {
 	return seq
 }
 
+// MaxCycle bounds the table SmoothOrder builds. Proportions are exact up to
+// this total; above it they are within 1/MaxCycle per target.
+const MaxCycle = 4096
+
 // SmoothOrder runs NGINX's smooth weighted round-robin once and returns one full
 // cycle as indexes into w: weights 5,1,1 give 0 0 1 0 2 0 0. Weights are divided
-// by their GCD to keep the cycle short. Zero weights never appear.
+// by their GCD to keep the cycle short, and scaled down if the cycle would still
+// exceed MaxCycle. Zero weights never appear.
 func SmoothOrder(w []int) []int {
 	g, total := 0, 0
 	for _, x := range w {
@@ -64,6 +69,15 @@ func SmoothOrder(w []int) []int {
 	ws := make([]int, len(w))
 	for i, x := range w {
 		ws[i] = x / g
+	}
+	sum := 0.0 // float: weights from a config file can overflow an int sum
+	for _, x := range ws {
+		sum += float64(x)
+	}
+	for i, x := range ws {
+		if sum > MaxCycle && x > 0 {
+			ws[i] = max(1, int(float64(x)*MaxCycle/sum))
+		}
 		total += ws[i]
 	}
 	cur := make([]int, len(ws))

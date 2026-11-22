@@ -74,6 +74,7 @@ func NewRouter(routes []Route) (*Router, error) {
 	wild := map[string][]*Route{}
 	names := map[string]bool{}
 	seenPool := map[*lb.Pool]bool{}
+	orders := map[string][]*lb.Pool{} // the matches of one rule share one table
 	for i := range routes {
 		rp := &Route{ // copy: the router owns its routes
 			Name: routes[i].Name, Hosts: routes[i].Hosts, Path: routes[i].Path, Exact: routes[i].Exact,
@@ -106,8 +107,12 @@ func NewRouter(routes []Route) (*Router, error) {
 				rt.pools = append(rt.pools, wp.Pool)
 			}
 		}
-		for _, j := range lb.SmoothOrder(weights) {
-			r.order = append(r.order, split[j].Pool)
+		key := fmt.Sprint(split)
+		if r.order = orders[key]; r.order == nil {
+			for _, j := range lb.SmoothOrder(weights) {
+				r.order = append(r.order, split[j].Pool)
+			}
+			orders[key] = r.order
 		}
 		if len(r.order) == 0 {
 			return nil, fmt.Errorf("route %q: all split weights are 0", r.Name)

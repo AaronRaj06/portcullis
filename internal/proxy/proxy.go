@@ -169,6 +169,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, rc, st.status, rid)
 		return
 	}
+	r = normalizePath(r)
 	route := snap.Router.Match(r)
 	if route == nil {
 		st.status, st.errKind = http.StatusNotFound, "no_route"
