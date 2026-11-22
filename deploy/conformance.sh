@@ -86,7 +86,13 @@ while :; do
   case "$state" in *Complete*) status=passed; break ;; *Failed*) status=failed; break ;; esac
   sleep 15
 done
-kubectl -n portcullis-system logs job/conformance >"$OUT/conformance.log" 2>&1
+kubectl -n portcullis-system logs job/conformance >"$TMP/conformance.log" 2>&1 || true
 # Top-level conformance test results, for docs/CONFORMANCE.md.
-grep -E '^    --- (PASS|FAIL|SKIP)' "$OUT/conformance.log" | sed 's/^ *//' | sort -k3 >"$OUT/results.txt" || true
+grep -E '^    --- (PASS|FAIL|SKIP)' "$TMP/conformance.log" | sed 's/^ *//' | sort -k3 >"$TMP/results.txt" || true
+if [ ! -s "$TMP/results.txt" ]; then # setup failed: do not replace the last real results
+  cp "$TMP/conformance.log" "$OUT/incomplete.log"
+  echo "suite $status without results; previous results kept, see $OUT/incomplete.log" >&2
+  exit 1
+fi
+cp "$TMP/conformance.log" "$TMP/results.txt" "$OUT/"
 echo "suite $status; $(grep -c PASS "$OUT/results.txt") pass, $(grep -c FAIL "$OUT/results.txt") fail, $(grep -c SKIP "$OUT/results.txt") skip -> $OUT/"

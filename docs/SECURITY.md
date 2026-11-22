@@ -28,7 +28,7 @@ Report vulnerabilities privately through GitHub's "Report a vulnerability" on th
 | Peer in `trustedProxies` | its `X-Forwarded-*` and `X-Request-Id` values | everything else |
 | Upstream | its responses to us | the proxy's own headers or memory |
 | Operator, controller (admin token) | the full config, which means all routing | n/a: full control |
-| HTTPRoute / PortcullisPolicy author | routes and policies on the objects their RBAC allows | other namespaces' backends (no ReferenceGrant support, so cross-namespace refs are refused) |
+| HTTPRoute / PortcullisPolicy author | routes and policies on the objects their RBAC allows | other namespaces' backends, unless a ReferenceGrant in that namespace allows them |
 
 ## Threats and defences
 
@@ -75,12 +75,12 @@ Policies are code supplied by config authors and, through `PortcullisPolicy`, by
 - **Data plane:** no Kubernetes credentials (`automountServiceAccountToken: false`). It runs as non-root UID 65532 on distroless images.
 - **Admin port isolation:** a NetworkPolicy lets only the controller reach port 9901. This depends on the CNI enforcing it.
 - **Controller RBAC (least privilege):**
-  - read Gateway API objects, PortcullisPolicies, Services and EndpointSlices;
+  - read Gateway API objects (ReferenceGrants included), PortcullisPolicies, Namespaces, Services and EndpointSlices;
   - write only `*/status`;
   - Leases and Events only in its own namespace.
 - **Isolation between users:**
-  - A route may only reference Services in its own namespace.
-  - Listener `allowedRoutes` is honoured; selectors are refused rather than guessed.
+  - A route may reference Services in another namespace only if a ReferenceGrant there allows it.
+  - Listener `allowedRoutes` is honoured. With a namespace selector, whoever can label a Namespace can let its routes attach.
   - A broken policy is rejected on its own and cannot block others.
 
 ## Known gaps (not defended)
@@ -88,6 +88,8 @@ Policies are code supplied by config authors and, through `PortcullisPolicy`, by
 - **Distributed rate-limit bypass.** Limits are per instance, divided by `instances`. Uneven load balancing lets a client exceed the global figure, by at most a factor of the replica count. An attacker rotating more than 100,000 keys forces evictions, which reset other keys' buckets. Use a per-IP key on a trusted client address, and do not treat `rate_limit` as abuse protection against a botnet.
 - **No global connection limit or per-client concurrency limit.** A volumetric flood is left to the network layer or a cloud load balancer in front.
 - **Gateway HTTPS listeners are not programmed** by the controller (`UnsupportedProtocol`). In Kubernetes, the proxy-to-client hop is plaintext unless TLS is terminated in front. Pod-to-pod admin traffic is plaintext HTTP, protected by the bearer token and the NetworkPolicy only.
+- **Gateways are not isolated from each other.** They share one address, so a route on one Gateway can capture another's traffic for the same host and path.
+- **PortcullisPolicies share one limit of 64.** Anyone who can create more than that many valid, attached policies (fewer, with the up to three generated deny policies) makes the snapshot invalid, and config updates stop for every Gateway until some are removed. Restrict who may create them.
 - **Response bodies are not inspected.** Policies see headers and status, never bodies.
 - **Trusted-proxy misconfiguration.** Putting a public range in `trustedProxies` lets anyone set their own client IP.
 - **The config author is all-powerful.** Anyone with the admin token, or with write access to the controller's inputs at cluster scope, can route traffic anywhere.

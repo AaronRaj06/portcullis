@@ -23,7 +23,7 @@ Every number below comes from a recorded result in this repository, and the sour
 
 - Built a Kubernetes controller for Gateway API (`GatewayClass`, `Gateway`, `HTTPRoute`) and a `PortcullisPolicy` CRD. A pure translation layer feeds hash-versioned config snapshots, which are acknowledged by every data-plane pod and retried with back-off. *(ADR 0012)*
 - Wrote a one-command kind demo and an end-to-end suite. Results: an exact **90/10 canary (450/50 of 500)**, **399/399 requests succeeding** while every v1 pod was deleted under load, and an invalid policy rejected with its `line:col` without affecting valid ones. *(`bench/results/evidence/phase6-demo-e2e.txt`)*
-- Ran the upstream Gateway API conformance suite and published the honest pass/fail table, including the features not supported. *(docs/CONFORMANCE.md)*
+- Ran the upstream Gateway API conformance suite and published the pass/fail table (29 of 40 core tests pass; not conformant), including the features not supported. *(docs/CONFORMANCE.md)*
 
 ## Talking points (no numbers needed)
 

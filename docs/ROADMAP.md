@@ -1,5 +1,7 @@
 # Roadmap
 
+> The project was closed at v0.2.1. The open items below are known limitations, with no planned work.
+
 What is deferred, and why. Anything not finished is listed here, never presented as done.
 
 ## Deferred from Phase 0
@@ -56,14 +58,12 @@ All five gaps recorded at the end of Phase 5 are closed (ADR 0011):
 ## Deferred from Phase 6
 
 - **HTTPS listeners** (TLS termination programmed from the Gateway's `certificateRefs`): rejected with `UnsupportedProtocol`. The data plane already terminates TLS; the controller would need to mount Secrets and push certificate paths.
-- **ReferenceGrant**: cross-namespace `backendRefs` are refused (`RefNotPermitted`).
 - **HTTPRoute filters** (header modifiers, redirects, rewrites, mirrors), **regex and query-param matches**: those rules are dropped and the route marked `PartiallyInvalid`. Most filters map naturally onto generated PolicyScript, which is the likely way to add them.
-- **allowedRoutes namespace selectors**: treated as not allowed (needs Namespace objects in the translation).
-- **Conformance bugs** (docs/CONFORMANCE.md): `allowedRoutes.kinds` is not validated (no `InvalidRouteKinds`); listener `AttachedRoutes` reads 0 in `GatewayWithAttachedRoutes`; a route that is not accepted has no `ResolvedRefs` condition; `HTTPRouteNoBackendRefs` is unconfirmed.
+- **Policy limit is cluster-wide**: more than 64 policies in one snapshot blocks every push (docs/SECURITY.md). Dropping the excess would fail open, so this needs a per-route limit instead.
 - **Partially invalid splits**: a share whose backend is invalid is dropped from the split instead of answering 500 for that share.
 - **Scale**: one full rebuild per change (ADR 0012). Per-Gateway work-queue keys and incremental pushes would be the next step.
 - **One data-plane fleet per controller**: every accepted Gateway is served by the same Deployment; no per-Gateway provisioning.
-  As a result, all Gateways share one address and one port. Routes on different Gateways that match the same host and path collide, and the first match wins. The conformance suite shows this (`HTTPRouteMultipleGateways`, listener port and hostname tests; docs/CONFORMANCE.md). The fix is a listener per Gateway port, with routes keyed by Gateway, or one data-plane Deployment per Gateway.
+  As a result, all Gateways share one address and one port. Routes on different Gateways that match the same host and path collide, and the first match wins. The conformance suite shows this (`HTTPRouteMultipleGateways`; docs/CONFORMANCE.md). The fix is a listener per Gateway port, with routes keyed by Gateway, or one data-plane Deployment per Gateway.
 
 ## By design (not planned)
 

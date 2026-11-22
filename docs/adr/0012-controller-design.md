@@ -16,8 +16,8 @@ Phase 6 (brief section 4): a controller that reconciles GatewayClass, Gateway an
 - **Unsupported features are rejected, not approximated:**
   - HTTPS listeners: `UnsupportedProtocol`.
   - Filters, regex matches and query-parameter matches: the rule is dropped and the route marked `PartiallyInvalid`.
-  - Cross-namespace backends: `RefNotPermitted` (no ReferenceGrant support).
-  - allowedRoutes selectors: treated as not allowed.
+  - Cross-namespace backends without a ReferenceGrant: `RefNotPermitted`.
+  - Route kinds other than HTTPRoute in `allowedRoutes.kinds`: `InvalidRouteKinds`.
 
   Serving a rule without its header filter or regex would be silently wrong.
 - **Requests that cannot be served are answered by generated PolicyScript.**
@@ -30,7 +30,7 @@ Phase 6 (brief section 4): a controller that reconciles GatewayClass, Gateway an
 - **Status writes only when something changed.** Conditions are merged so `lastTransitionTime` survives, and other controllers' `parents[]` entries on an HTTPRoute are preserved. Watches on our own kinds use `GenerationChangedPredicate`, so our status updates do not re-trigger reconciles.
 - **`Programmed` on HTTPRoute parents** is an addition (core Gateway API has Accepted, ResolvedRefs and PartiallyInvalid on routes). It reports the data-plane acknowledgement, which the brief asks for.
 - **Least privilege:**
-  - The controller can read Gateway API objects, policies, Services and EndpointSlices; update only `*/status`; and manage Leases and Events in its own namespace.
+  - The controller can read Gateway API objects (ReferenceGrants included), policies, Namespaces, Services and EndpointSlices; update only `*/status`; and manage Leases and Events in its own namespace.
   - The data plane has no API access at all (`automountServiceAccountToken: false`).
   - A NetworkPolicy limits the admin port to the controller.
   - The admin token is a Secret generated at install time.
@@ -39,5 +39,5 @@ Phase 6 (brief section 4): a controller that reconciles GatewayClass, Gateway an
 ## Consequences
 
 - At large scale (tens of thousands of routes), the full rebuild and the config size become the limit. The upgrade path is per-Gateway keys and incremental pushes.
-- With no ReferenceGrant support, every route must live in its Services' namespace.
+- Since v0.2.1 the controller also watches Namespaces (for `allowedRoutes` selectors) and ReferenceGrants, so the ReferenceGrant CRD must be installed.
 - TLS termination at the Gateway (HTTPS listeners) is not done yet; the data plane already supports TLS, but the controller does not program certificates.

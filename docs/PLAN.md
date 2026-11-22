@@ -67,3 +67,7 @@ Task breakdown per phase. Each phase ends with: `go test -race ./...`, docs upda
 - [x] README with Mermaid diagram and benchmark table
 - [x] Gateway API conformance run, honest table (`docs/CONFORMANCE.md`)
 - [x] `docs/SECURITY.md` threat model; asciinema demo script (`deploy/record-demo.sh`); `docs/RESUME_BULLETS.md`
+
+## v0.2.1: Fixes and closure
+- [x] ReferenceGrant, namespace selectors, route kinds, status fixes; snapshot-breaking bugs
+- [x] Conformance rerun (29 of 40); v0.2.0 report corrected

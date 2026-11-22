@@ -89,7 +89,7 @@ All results are from one Apple M1 laptop running everything in Docker; see [docs
 | 100 config reloads under load (10 invalid) | **0 failed requests** |
 | PolicyScript, 5-rule example | **372 ns, 1 allocation**; fuzzed for 9.6M executions with no failures |
 | Kubernetes demo (`make e2e`) | 90/10 canary 450/50 of 500; 399/399 requests succeed while every v1 pod is deleted |
-| Gateway API conformance | see [docs/CONFORMANCE.md](docs/CONFORMANCE.md) |
+| Gateway API conformance | **29 of 40** core tests pass (not conformant: no HTTPS listeners or filters, one shared address); see [docs/CONFORMANCE.md](docs/CONFORMANCE.md) |
 
 ## Design decisions
 

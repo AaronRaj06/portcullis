@@ -24,7 +24,7 @@ kind: ClusterRole
 metadata: {name: portcullis-controller}
 rules:
   - apiGroups: [gateway.networking.k8s.io]
-    resources: [gatewayclasses, gateways, httproutes]
+    resources: [gatewayclasses, gateways, httproutes, referencegrants]
     verbs: [get, list, watch]
   - apiGroups: [gateway.networking.k8s.io]
     resources: [gatewayclasses/status, gateways/status, httproutes/status]
@@ -36,7 +36,7 @@ rules:
     resources: [portcullispolicies/status]
     verbs: [update]
   - apiGroups: [""]
-    resources: [services]
+    resources: [services, namespaces]
     verbs: [get, list, watch]
   - apiGroups: [discovery.k8s.io]
     resources: [endpointslices]

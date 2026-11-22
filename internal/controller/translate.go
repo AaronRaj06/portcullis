@@ -21,6 +21,7 @@ import (
 	discoveryv1 "k8s.io/api/discovery/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 
@@ -37,15 +38,26 @@ const ControllerName gwv1.GatewayController = "portcullis.dev/gateway-controller
 // backend, and the attached deny(...) runs before any backend is picked.
 const sentinelPool = "portcullis-sentinel"
 
+// Names of the controller-made policies. Each deny kind is one policy shared
+// by all its routes, so broken routes cannot exhaust config.MaxPolicies.
+const (
+	denyNoBackends     = "portcullis:deny-500-no-backends"
+	denyInvalidBackend = "portcullis:deny-500-invalid-backend"
+	denyNoEndpoints    = "portcullis:deny-503-no-endpoints"
+	denyNoRoutes       = "portcullis:no-routes"
+)
+
 // Inputs is everything the translation reads, already listed from the cluster.
 type Inputs struct {
-	Classes   []gwv1.GatewayClass
-	Gateways  []gwv1.Gateway
-	Routes    []gwv1.HTTPRoute
-	Services  []corev1.Service
-	Slices    []discoveryv1.EndpointSlice
-	Policies  []v1alpha1.PortcullisPolicy
-	Instances int // data-plane replicas (for rate-limit sharing)
+	Classes    []gwv1.GatewayClass
+	Gateways   []gwv1.Gateway
+	Routes     []gwv1.HTTPRoute
+	Services   []corev1.Service
+	Slices     []discoveryv1.EndpointSlice
+	Policies   []v1alpha1.PortcullisPolicy
+	Namespaces []corev1.Namespace    // for allowedRoutes namespace selectors
+	Grants     []gwv1.ReferenceGrant // for cross-namespace backendRefs
+	Instances  int                   // data-plane replicas (for rate-limit sharing)
 }
 
 // Output is the config to push and the status each object should get.
@@ -132,10 +144,12 @@ type translator struct {
 	services map[types.NamespacedName]*corev1.Service
 	slices   map[types.NamespacedName][]*discoveryv1.EndpointSlice
 	gateways map[types.NamespacedName]*gwv1.Gateway // ours and accepted
+	nsLabels map[string]labels.Set
 
 	routes        []config.Route
 	pools         map[string]*config.Pool
 	extra         []config.Policy                   // controller-made policies (deny 500/503)
+	denies        map[string]int                    // deny policy name -> its index in extra
 	routeOf       map[types.NamespacedName][]string // HTTPRoute -> portcullis route names
 	gatewayRoutes map[types.NamespacedName][]string // Gateway -> portcullis route names
 	attached      map[types.NamespacedName]map[string]int32
@@ -147,6 +161,10 @@ func (t *translator) index() {
 		t.services[nsName(&t.in.Services[i])] = &t.in.Services[i]
 	}
 	t.slices = map[types.NamespacedName][]*discoveryv1.EndpointSlice{}
+	t.nsLabels = map[string]labels.Set{}
+	for _, n := range t.in.Namespaces {
+		t.nsLabels[n.Name] = n.Labels
+	}
 	for i := range t.in.Slices {
 		s := &t.in.Slices[i]
 		if svc := s.Labels[discoveryv1.LabelServiceName]; svc != "" {
@@ -154,6 +172,7 @@ func (t *translator) index() {
 			t.slices[k] = append(t.slices[k], s)
 		}
 	}
+	t.denies = map[string]int{}
 	t.attached = map[types.NamespacedName]map[string]int32{}
 }
 
@@ -166,9 +185,17 @@ func (t *translator) gateway(g *gwv1.Gateway) {
 		ls := gwv1.ListenerStatus{Name: l.Name, SupportedKinds: []gwv1.RouteGroupKind{{Group: ptr(gwv1.Group(gwv1.GroupName)), Kind: "HTTPRoute"}}}
 		if l.Protocol == gwv1.HTTPProtocolType {
 			valid++
+			resolved := cond(string(gwv1.ListenerConditionResolvedRefs), string(gwv1.ListenerReasonResolvedRefs), true, g.Generation, "")
+			if !allowsHTTPRoute(l) {
+				ls.SupportedKinds = []gwv1.RouteGroupKind{}
+			}
+			if invalidKinds(l) {
+				resolved = cond(string(gwv1.ListenerConditionResolvedRefs), string(gwv1.ListenerReasonInvalidRouteKinds), false, g.Generation,
+					"only HTTPRoute is supported")
+			}
 			ls.Conditions = []metav1.Condition{
 				cond(string(gwv1.ListenerConditionAccepted), string(gwv1.ListenerReasonAccepted), true, g.Generation, ""),
-				cond(string(gwv1.ListenerConditionResolvedRefs), string(gwv1.ListenerReasonResolvedRefs), true, g.Generation, ""),
+				resolved,
 			}
 		} else {
 			ls.SupportedKinds = nil
@@ -195,6 +222,28 @@ func (t *translator) gateway(g *gwv1.Gateway) {
 	}
 }
 
+// allowedKinds is the listener's allowedRoutes.kinds; empty means "the
+// protocol's default", which for HTTP is HTTPRoute.
+func allowedKinds(l gwv1.Listener) []gwv1.RouteGroupKind {
+	if l.AllowedRoutes == nil {
+		return nil
+	}
+	return l.AllowedRoutes.Kinds
+}
+
+func isHTTPRoute(k gwv1.RouteGroupKind) bool {
+	return deref(k.Group, gwv1.GroupName) == gwv1.GroupName && k.Kind == "HTTPRoute"
+}
+
+func allowsHTTPRoute(l gwv1.Listener) bool {
+	ks := allowedKinds(l)
+	return len(ks) == 0 || slices.ContainsFunc(ks, isHTTPRoute)
+}
+
+func invalidKinds(l gwv1.Listener) bool {
+	return slices.ContainsFunc(allowedKinds(l), func(k gwv1.RouteGroupKind) bool { return !isHTTPRoute(k) })
+}
+
 func ptr[T any](v T) *T { return &v }
 
 func deref[T any](p *T, def T) T {
@@ -208,7 +257,7 @@ func deref[T any](p *T, def T) T {
 func (t *translator) route(r *gwv1.HTTPRoute) {
 	key := nsName(r)
 	var statuses []gwv1.RouteParentStatus
-	for _, pr := range r.Spec.ParentRefs {
+	for pi, pr := range r.Spec.ParentRefs {
 		if deref(pr.Group, gwv1.GroupName) != gwv1.GroupName || deref(pr.Kind, "Gateway") != "Gateway" {
 			continue
 		}
@@ -220,17 +269,18 @@ func (t *translator) route(r *gwv1.HTTPRoute) {
 		g := t.gateways[gk]
 		if g == nil {
 			st.Conditions = []metav1.Condition{cond(string(gwv1.RouteConditionAccepted), string(gwv1.RouteReasonNoMatchingParent), false,
-				r.Generation, "the parent Gateway is not accepted")}
+				r.Generation, "the parent Gateway is not accepted"), t.resolvedRefs(r)}
 			statuses = append(statuses, st)
 			continue
 		}
 		hosts, listeners, reason := t.listenersFor(g, r, pr)
 		if reason != "" {
-			st.Conditions = []metav1.Condition{cond(string(gwv1.RouteConditionAccepted), reason, false, r.Generation, "no listener accepts this route")}
+			st.Conditions = []metav1.Condition{cond(string(gwv1.RouteConditionAccepted), reason, false, r.Generation, "no listener accepts this route"),
+				t.resolvedRefs(r)}
 			statuses = append(statuses, st)
 			continue
 		}
-		st.Conditions = t.rules(r, gk, hosts)
+		st.Conditions = t.rules(r, gk, pi, hosts)
 		if meta.IsStatusConditionTrue(st.Conditions, string(gwv1.RouteConditionAccepted)) {
 			for _, l := range listeners {
 				if t.attached[gk] == nil {
@@ -257,7 +307,7 @@ func (t *translator) listenersFor(g *gwv1.Gateway, r *gwv1.HTTPRoute, pr gwv1.Pa
 			(pr.Port != nil && *pr.Port != l.Port) {
 			continue
 		}
-		if !namespaceAllowed(l, g, r) {
+		if !allowsHTTPRoute(l) || !t.namespaceAllowed(l, g, r) {
 			reason = string(gwv1.RouteReasonNotAllowedByListeners)
 			continue
 		}
@@ -282,18 +332,24 @@ func (t *translator) listenersFor(g *gwv1.Gateway, r *gwv1.HTTPRoute, pr gwv1.Pa
 	return slices.Compact(hosts), names, ""
 }
 
-// shortcut: allowedRoutes "Selector" (namespace labels) is treated as not
-// allowed; supporting it needs Namespace objects in Inputs.
-func namespaceAllowed(l gwv1.Listener, g *gwv1.Gateway, r *gwv1.HTTPRoute) bool {
+func (t *translator) namespaceAllowed(l gwv1.Listener, g *gwv1.Gateway, r *gwv1.HTTPRoute) bool {
 	from := gwv1.NamespacesFromSame
-	if l.AllowedRoutes != nil && l.AllowedRoutes.Namespaces != nil && l.AllowedRoutes.Namespaces.From != nil {
-		from = *l.AllowedRoutes.Namespaces.From
+	var ns *gwv1.RouteNamespaces
+	if l.AllowedRoutes != nil && l.AllowedRoutes.Namespaces != nil {
+		ns = l.AllowedRoutes.Namespaces
+		from = deref(ns.From, from)
 	}
 	switch from {
 	case gwv1.NamespacesFromAll:
 		return true
 	case gwv1.NamespacesFromSame:
 		return g.Namespace == r.Namespace
+	case gwv1.NamespacesFromSelector:
+		if ns.Selector == nil {
+			return false
+		}
+		sel, err := metav1.LabelSelectorAsSelector(ns.Selector)
+		return err == nil && sel.Matches(t.nsLabels[r.Namespace])
 	}
 	return false
 }
@@ -335,7 +391,7 @@ func hostMatches(pattern, host string) bool {
 
 // rules translates the route's rules for one parent and returns the
 // Accepted, ResolvedRefs (and if needed PartiallyInvalid) conditions.
-func (t *translator) rules(r *gwv1.HTTPRoute, gk types.NamespacedName, hosts []string) []metav1.Condition {
+func (t *translator) rules(r *gwv1.HTTPRoute, gk types.NamespacedName, pi int, hosts []string) []metav1.Condition {
 	key := nsName(r)
 	var unsupported, unresolved []string
 	resolvedReason := string(gwv1.RouteReasonResolvedRefs)
@@ -356,6 +412,9 @@ func (t *translator) rules(r *gwv1.HTTPRoute, gk types.NamespacedName, hosts []s
 		}
 		for mi, m := range matches {
 			name := fmt.Sprintf("%s/%s/%s/%s/r%d/m%d", gk.Namespace, gk.Name, r.Namespace, r.Name, ri, mi)
+			if pi > 0 { // parentRefs can name one Gateway several times (by sectionName or port)
+				name += fmt.Sprintf("/p%d", pi)
+			}
 			cr := config.Route{Name: name, Hosts: hosts, Path: "/", PathType: "Prefix"}
 			if m.Path != nil {
 				cr.Path = deref(m.Path.Value, "/")
@@ -370,13 +429,14 @@ func (t *translator) rules(r *gwv1.HTTPRoute, gk types.NamespacedName, hosts []s
 				cr.Headers = append(cr.Headers, config.HeaderMatch{Name: string(h.Name), Value: h.Value})
 			}
 			if len(split) == 0 { // every backend is invalid or has no endpoints
-				status, msg := 500, "no valid backend"
-				if reason == "" {
-					status, msg = 503, "no ready endpoints"
+				deny, status, msg := denyInvalidBackend, 500, "no valid backend"
+				if len(rule.BackendRefs) == 0 {
+					deny, msg = denyNoBackends, "the rule has no backendRefs"
+				} else if reason == "" {
+					deny, status, msg = denyNoEndpoints, 503, "no ready endpoints"
 				}
 				cr.Backends = []config.PoolRef{{Pool: sentinelPool}}
-				t.extra = append(t.extra, config.Policy{Routes: []string{name},
-					Script: fmt.Sprintf("policy %q { on request { deny(%d, %q) } }", "portcullis:"+name, status, msg)})
+				t.deny(name, deny, status, msg)
 			} else {
 				cr.Backends = split
 			}
@@ -400,6 +460,17 @@ func (t *translator) rules(r *gwv1.HTTPRoute, gk types.NamespacedName, hosts []s
 	conds = append(conds, cond(string(gwv1.RouteConditionResolvedRefs), resolvedReason, len(unresolved) == 0, r.Generation,
 		strings.Join(unresolved, "; ")))
 	return conds
+}
+
+// deny makes route answer status through the shared policy of that name.
+func (t *translator) deny(route, name string, status int, msg string) {
+	i, ok := t.denies[name]
+	if !ok {
+		i = len(t.extra)
+		t.denies[name] = i
+		t.extra = append(t.extra, config.Policy{Script: fmt.Sprintf("policy %q { on request { deny(%d, %q) } }", name, status, msg)})
+	}
+	t.extra[i].Routes = append(t.extra[i].Routes, route)
 }
 
 // unsupportedRule names the first feature of rule that Portcullis cannot honour.
@@ -441,31 +512,12 @@ func (t *translator) backends(r *gwv1.HTTPRoute, rule gwv1.HTTPRouteRule) ([]con
 		problems = append(problems, fmt.Sprintf(format, a...))
 	}
 	for _, br := range rule.BackendRefs {
-		ref := br.BackendObjectReference
-		if deref(ref.Group, "") != "" || deref(ref.Kind, "Service") != "Service" {
-			fail(gwv1.RouteReasonInvalidKind, "backend %s: only core Services are supported", ref.Name)
+		svc, port, rs, problem := t.resolve(r, br.BackendObjectReference)
+		if rs != "" {
+			fail(rs, "%s", problem)
 			continue
 		}
-		ns := string(deref(ref.Namespace, gwv1.Namespace(r.Namespace)))
-		if ns != r.Namespace { // shortcut: ReferenceGrant is not implemented, so cross-namespace refs are refused
-			fail(gwv1.RouteReasonRefNotPermitted, "backend %s/%s: cross-namespace references need a ReferenceGrant, which is not supported", ns, ref.Name)
-			continue
-		}
-		svc := t.services[types.NamespacedName{Namespace: ns, Name: string(ref.Name)}]
-		if svc == nil {
-			fail(gwv1.RouteReasonBackendNotFound, "service %s/%s not found", ns, ref.Name)
-			continue
-		}
-		if ref.Port == nil {
-			fail(gwv1.RouteReasonUnsupportedValue, "backend %s: port is required", ref.Name)
-			continue
-		}
-		port := servicePort(svc, *ref.Port)
-		if port == nil {
-			fail(gwv1.RouteReasonBackendNotFound, "service %s/%s has no port %d", ns, ref.Name, *ref.Port)
-			continue
-		}
-		name := fmt.Sprintf("%s/%s:%d", ns, svc.Name, port.Port)
+		name := fmt.Sprintf("%s/%s:%d", svc.Namespace, svc.Name, port.Port)
 		pool := t.pool(name, svc, port)
 		w := int(deref(br.Weight, 1))
 		if pool == nil || w == 0 {
@@ -474,6 +526,64 @@ func (t *translator) backends(r *gwv1.HTTPRoute, rule gwv1.HTTPRouteRule) ([]con
 		split = append(split, config.PoolRef{Pool: name, Weight: &w})
 	}
 	return split, problems, reason
+}
+
+// resolve checks one backendRef and returns its Service and port, or the
+// ResolvedRefs reason and message why it cannot be used.
+func (t *translator) resolve(r *gwv1.HTTPRoute, ref gwv1.BackendObjectReference) (*corev1.Service, *corev1.ServicePort, gwv1.RouteConditionReason, string) {
+	if deref(ref.Group, "") != "" || deref(ref.Kind, "Service") != "Service" {
+		return nil, nil, gwv1.RouteReasonInvalidKind, fmt.Sprintf("backend %s: only core Services are supported", ref.Name)
+	}
+	ns := string(deref(ref.Namespace, gwv1.Namespace(r.Namespace)))
+	if ns != r.Namespace && !t.granted(r.Namespace, ns, string(ref.Name)) {
+		return nil, nil, gwv1.RouteReasonRefNotPermitted, fmt.Sprintf("backend %s/%s: no ReferenceGrant allows this cross-namespace reference", ns, ref.Name)
+	}
+	svc := t.services[types.NamespacedName{Namespace: ns, Name: string(ref.Name)}]
+	if svc == nil {
+		return nil, nil, gwv1.RouteReasonBackendNotFound, fmt.Sprintf("service %s/%s not found", ns, ref.Name)
+	}
+	if ref.Port == nil {
+		return nil, nil, gwv1.RouteReasonUnsupportedValue, fmt.Sprintf("backend %s: port is required", ref.Name)
+	}
+	port := servicePort(svc, *ref.Port)
+	if port == nil {
+		return nil, nil, gwv1.RouteReasonBackendNotFound, fmt.Sprintf("service %s/%s has no port %d", ns, ref.Name, *ref.Port)
+	}
+	return svc, port, "", ""
+}
+
+// granted reports whether a ReferenceGrant in toNS lets HTTPRoutes in fromNS
+// reference the Service name.
+func (t *translator) granted(fromNS, toNS, name string) bool {
+	for _, g := range t.in.Grants {
+		if g.Namespace != toNS {
+			continue
+		}
+		from := slices.ContainsFunc(g.Spec.From, func(f gwv1.ReferenceGrantFrom) bool {
+			return f.Group == gwv1.GroupName && f.Kind == "HTTPRoute" && string(f.Namespace) == fromNS
+		})
+		to := slices.ContainsFunc(g.Spec.To, func(to gwv1.ReferenceGrantTo) bool {
+			return to.Group == "" && to.Kind == "Service" && (to.Name == nil || string(*to.Name) == name)
+		})
+		if from && to {
+			return true
+		}
+	}
+	return false
+}
+
+// resolvedRefs is the ResolvedRefs condition for a route that attached to no
+// listener: the spec still wants it reported.
+func (t *translator) resolvedRefs(r *gwv1.HTTPRoute) metav1.Condition {
+	reason, ok, msgs := string(gwv1.RouteReasonResolvedRefs), true, []string(nil)
+	for _, rule := range r.Spec.Rules {
+		for _, br := range rule.BackendRefs {
+			if _, _, rs, problem := t.resolve(r, br.BackendObjectReference); rs != "" {
+				reason, ok, msgs = string(rs), false, append(msgs, problem)
+			}
+		}
+	}
+	return cond(string(gwv1.RouteConditionResolvedRefs), reason, ok, r.Generation, strings.Join(msgs, "; "))
 }
 
 func servicePort(svc *corev1.Service, port int32) *corev1.ServicePort {
@@ -571,6 +681,11 @@ func (t *translator) policies() {
 			set("Invalid", false, err.Error())
 			continue
 		}
+		switch prog.Name {
+		case denyNoBackends, denyInvalidBackend, denyNoEndpoints, denyNoRoutes:
+			set("Conflicted", false, fmt.Sprintf("policy name %q is reserved by portcullis", prog.Name))
+			continue
+		}
 		if prev, dup := names[prog.Name]; dup {
 			set("Conflicted", false, fmt.Sprintf("policy name %q is already used by %s", prog.Name, prev))
 			continue
@@ -608,9 +723,9 @@ func (t *translator) config() *config.Config {
 		c.Pools = append(c.Pools, *t.pools[n])
 	}
 	if len(c.Routes) == 0 {
-		c.Routes = []config.Route{{Name: "portcullis:no-routes", Backends: []config.PoolRef{{Pool: sentinelPool}}}}
-		c.Policies = append(c.Policies, config.Policy{Routes: []string{"portcullis:no-routes"},
-			Script: `policy "portcullis:no-routes" { on request { deny(404, "no HTTPRoute is attached") } }`})
+		c.Routes = []config.Route{{Name: denyNoRoutes, Backends: []config.PoolRef{{Pool: sentinelPool}}}}
+		c.Policies = append(c.Policies, config.Policy{Routes: []string{denyNoRoutes},
+			Script: fmt.Sprintf("policy %q { on request { deny(404, %q) } }", denyNoRoutes, "no HTTPRoute is attached")})
 	}
 	return c
 }

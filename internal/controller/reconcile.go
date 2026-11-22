@@ -51,6 +51,8 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&gwv1.Gateway{}, all, spec).
 		Watches(&gwv1.HTTPRoute{}, all, spec).
 		Watches(&v1alpha1.PortcullisPolicy{}, all, spec).
+		Watches(&gwv1.ReferenceGrant{}, all, spec).
+		Watches(&corev1.Namespace{}, all). // labels feed allowedRoutes selectors
 		Watches(&corev1.Service{}, all).
 		Watches(&discoveryv1.EndpointSlice{}, all).
 		Complete(r)
@@ -66,15 +68,17 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 		services corev1.ServiceList
 		eps      discoveryv1.EndpointSliceList
 		policies v1alpha1.PortcullisPolicyList
+		grants   gwv1.ReferenceGrantList
+		nss      corev1.NamespaceList
 	)
-	for _, l := range []client.ObjectList{&classes, &gateways, &routes, &services, &eps, &policies} {
+	for _, l := range []client.ObjectList{&classes, &gateways, &routes, &services, &eps, &policies, &grants, &nss} {
 		if err := r.List(ctx, l); err != nil {
 			return reconcile.Result{}, err
 		}
 	}
 	endpoints := r.dataPlanes(eps.Items)
 	out := Translate(Inputs{Classes: classes.Items, Gateways: gateways.Items, Routes: routes.Items, Services: services.Items,
-		Slices: eps.Items, Policies: policies.Items, Instances: len(endpoints)})
+		Slices: eps.Items, Policies: policies.Items, Grants: grants.Items, Namespaces: nss.Items, Instances: len(endpoints)})
 
 	snap, err := NewSnapshot(out.Config)
 	if err == nil {

@@ -1,6 +1,8 @@
 package controller
 
 import (
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -172,7 +174,7 @@ func TestMatchesAndRejections(t *testing.T) {
 	// A route with no valid backend answers 500 by a generated policy.
 	found := false
 	for _, p := range out.Config.Policies {
-		if strings.Contains(p.Script, "deny(500") && p.Routes[0] == "default/gw/default/missing/r0/m0" {
+		if strings.Contains(p.Script, "deny(500") && slices.Contains(p.Routes, "default/gw/default/missing/r0/m0") {
 			found = true
 		}
 	}
@@ -258,5 +260,125 @@ func TestPolicies(t *testing.T) {
 	// Gateway-wide policies run first.
 	if len(out.Config.Policies) != 2 || !strings.HasPrefix(out.Config.Policies[0].Script, `policy "gw"`) {
 		t.Fatalf("attached policies: %+v", out.Config.Policies)
+	}
+}
+
+// Namespace selectors, allowedRoutes kinds, ReferenceGrant, ResolvedRefs on
+// unattached routes, and 500 for rules without backendRefs.
+func TestAllowedRoutesAndReferenceGrants(t *testing.T) {
+	sel := gwv1.NamespacesFromSelector
+	labelled := gwv1.Listener{Name: "sel", Port: 80, Protocol: gwv1.HTTPProtocolType, AllowedRoutes: &gwv1.AllowedRoutes{
+		Namespaces: &gwv1.RouteNamespaces{From: &sel, Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"team": "a"}}}}}
+	badKind := gwv1.Listener{Name: "kinds", Port: 81, Protocol: gwv1.HTTPProtocolType, AllowedRoutes: &gwv1.AllowedRoutes{
+		Kinds: []gwv1.RouteGroupKind{{Kind: "InvalidRoute"}}}}
+	other := gwv1.Namespace("backends")
+	cross := func(name, ns string) gwv1.HTTPRoute {
+		r := httpRoute(name, nil, gwv1.HTTPRouteRule{BackendRefs: []gwv1.HTTPBackendRef{{BackendRef: gwv1.BackendRef{
+			BackendObjectReference: gwv1.BackendObjectReference{Name: "web", Namespace: &other, Port: ptr(gwv1.PortNumber(80))}}}}})
+		r.Namespace = ns
+		r.Spec.ParentRefs[0].Namespace = ptr(gwv1.Namespace("default"))
+		return r
+	}
+	svc := service("web", 80)
+	svc.Namespace = "backends"
+	sl := slice("web", 80, true, "10.0.0.1")
+	sl.Namespace = "backends"
+	grant := gwv1.ReferenceGrant{ObjectMeta: om("backends", "g"), Spec: gwv1.ReferenceGrantSpec{
+		From: []gwv1.ReferenceGrantFrom{{Group: gwv1.GroupName, Kind: "HTTPRoute", Namespace: "team-a"}},
+		To:   []gwv1.ReferenceGrantTo{{Group: "", Kind: "Service"}}}}
+	empty := httpRoute("empty", nil, gwv1.HTTPRouteRule{})
+	empty.Namespace = "team-a"
+	empty.Spec.ParentRefs[0].Namespace = ptr(gwv1.Namespace("default"))
+	in := Inputs{Classes: []gwv1.GatewayClass{class()}, Gateways: []gwv1.Gateway{gateway(labelled, badKind)},
+		Services: []corev1.Service{svc}, Slices: []discoveryv1.EndpointSlice{sl}, Grants: []gwv1.ReferenceGrant{grant},
+		Namespaces: []corev1.Namespace{{ObjectMeta: metav1.ObjectMeta{Name: "team-a", Labels: map[string]string{"team": "a"}}},
+			{ObjectMeta: metav1.ObjectMeta{Name: "team-b"}}},
+		Routes: []gwv1.HTTPRoute{cross("granted", "team-a"), cross("refused", "team-b"), empty}}
+	out := Translate(in)
+	mustValidate(t, out.Config)
+
+	g := out.Gateways[types.NamespacedName{Namespace: "default", Name: "gw"}]
+	if c := condition(t, g.Listeners[1].Conditions, "ResolvedRefs"); c.Reason != "InvalidRouteKinds" || len(g.Listeners[1].SupportedKinds) != 0 {
+		t.Fatalf("invalid kinds listener: %+v %+v", c, g.Listeners[1].SupportedKinds)
+	}
+	if n := g.Listeners[0].AttachedRoutes; n != 2 { // granted and empty, from the labelled namespace
+		t.Fatalf("attached routes %d", n)
+	}
+	st := out.Routes[types.NamespacedName{Namespace: "team-a", Name: "granted"}][0].Conditions
+	if c := condition(t, st, "ResolvedRefs"); c.Status != metav1.ConditionTrue {
+		t.Fatalf("granted: %+v", c)
+	}
+	st = out.Routes[types.NamespacedName{Namespace: "team-b", Name: "refused"}][0].Conditions
+	if c := condition(t, st, "Accepted"); c.Reason != "NotAllowedByListeners" {
+		t.Fatalf("refused accepted: %+v", c)
+	}
+	if c := condition(t, st, "ResolvedRefs"); c.Reason != "RefNotPermitted" { // reported even when not attached
+		t.Fatalf("refused refs: %+v", c)
+	}
+	found := false
+	for _, p := range out.Config.Policies {
+		found = found || (slices.Contains(p.Routes, "default/gw/team-a/empty/r0/m0") && strings.Contains(p.Script, "deny(500"))
+	}
+	if !found {
+		t.Fatalf("no deny(500) for a rule without backendRefs: %+v", out.Config.Policies)
+	}
+}
+
+// One route naming two listeners of a Gateway must not produce duplicate route
+// names: that would invalidate the snapshot for every Gateway.
+func TestRouteWithTwoParentRefsToOneGateway(t *testing.T) {
+	a, b := gwv1.Hostname("a.example.com"), gwv1.Hostname("b.example.com")
+	r := httpRoute("two", nil, gwv1.HTTPRouteRule{})
+	r.Spec.ParentRefs = []gwv1.ParentReference{{Name: "gw", SectionName: ptr(gwv1.SectionName("a"))}, {Name: "gw", SectionName: ptr(gwv1.SectionName("b"))}}
+	out := Translate(Inputs{Classes: []gwv1.GatewayClass{class()}, Routes: []gwv1.HTTPRoute{r},
+		Gateways: []gwv1.Gateway{gateway(gwv1.Listener{Name: "a", Port: 80, Protocol: gwv1.HTTPProtocolType, Hostname: &a},
+			gwv1.Listener{Name: "b", Port: 80, Protocol: gwv1.HTTPProtocolType, Hostname: &b})}})
+	mustValidate(t, out.Config)
+	var hosts []string
+	for _, cr := range out.Config.Routes {
+		hosts = append(hosts, cr.Hosts...)
+	}
+	if len(hosts) != 2 || hosts[0] != string(a) || hosts[1] != string(b) {
+		t.Fatalf("hosts %v", hosts)
+	}
+}
+
+func TestRouteOnUnacceptedGatewayReportsResolvedRefs(t *testing.T) {
+	out := Translate(Inputs{Classes: []gwv1.GatewayClass{class()},
+		Gateways: []gwv1.Gateway{gateway(gwv1.Listener{Name: "tls", Port: 443, Protocol: gwv1.HTTPSProtocolType})},
+		Routes:   []gwv1.HTTPRoute{httpRoute("r", nil, gwv1.HTTPRouteRule{BackendRefs: []gwv1.HTTPBackendRef{backendRef("nope", 80, 1)}})}})
+	st := out.Routes[types.NamespacedName{Namespace: "default", Name: "r"}][0].Conditions
+	if c := condition(t, st, "ResolvedRefs"); c.Reason != "BackendNotFound" {
+		t.Fatalf("resolved refs: %+v", c)
+	}
+}
+
+// Generated deny policies must neither exhaust config.MaxPolicies nor be
+// shadowed by a user's policy of the same name.
+func TestGeneratedPoliciesCannotBreakTheSnapshot(t *testing.T) {
+	var routes []gwv1.HTTPRoute
+	for i := range config.MaxPolicies + 1 {
+		routes = append(routes, httpRoute(fmt.Sprintf("r%d", i), nil, gwv1.HTTPRouteRule{}))
+	}
+	in := Inputs{Classes: []gwv1.GatewayClass{class()}, Gateways: []gwv1.Gateway{gateway()}, Routes: routes}
+	out := Translate(in)
+	mustValidate(t, out.Config)
+	n := 0
+	for _, p := range out.Config.Policies {
+		if strings.Contains(p.Script, "deny(500") {
+			n += len(p.Routes)
+		}
+	}
+	if n != len(routes) {
+		t.Fatalf("%d of %d routes deny", n, len(routes))
+	}
+
+	in.Policies = []v1alpha1.PortcullisPolicy{{ObjectMeta: om("default", "clash"), Spec: v1alpha1.PolicySpec{
+		TargetRef: v1alpha1.TargetRef{Kind: "Gateway", Name: "gw"},
+		Script:    `policy "portcullis:deny-500-no-backends" { on request { deny(403, "x") } }`}}}
+	out = Translate(in)
+	mustValidate(t, out.Config)
+	if c := condition(t, out.Policies[types.NamespacedName{Namespace: "default", Name: "clash"}], "Accepted"); c.Reason != "Conflicted" {
+		t.Fatalf("clash: %+v", c)
 	}
 }
