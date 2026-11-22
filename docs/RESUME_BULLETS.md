@@ -4,7 +4,7 @@ Every number below comes from a recorded result in this repository, and the sour
 
 ## Short version (pick three)
 
-- Built **Portcullis**, an L7 reverse proxy, load balancer and Kubernetes Gateway API controller in Go (about 6,900 lines plus 5,200 lines of tests). Its iRules-style policy language evaluates a 5-rule policy in **372 ns with 1 allocation**.
+- Built **Portcullis**, an L7 reverse proxy, load balancer and Kubernetes Gateway API controller in Go that passes **all 40 core tests** of the upstream Gateway API conformance suite (v1.7.0, `GATEWAY-HTTP`). Its iRules-style policy language evaluates a 5-rule policy in **372 ns with 1 allocation**.
 - In failure-injection runs at 1,000 req/s, killing one of two backends caused **0 failed requests out of 89,990**, in each of 3 runs. The backend was re-admitted **240–464 ms** after it came back, against 1.2–1.8 s for NGINX on the same harness.
 - Two profiling-driven optimisation rounds cut per-request handler allocations by **49% (35 → 18)** and latency by **27%**. The result is **6–12% less CPU per request** than Go's standard `httputil.ReverseProxy`; NGINX is still 22–31% cheaper.
 
@@ -21,9 +21,10 @@ Every number below comes from a recorded result in this repository, and the sour
 
 ## Control plane
 
-- Built a Kubernetes controller for Gateway API (`GatewayClass`, `Gateway`, `HTTPRoute`) and a `PortcullisPolicy` CRD. A pure translation layer feeds hash-versioned config snapshots, which are acknowledged by every data-plane pod and retried with back-off. *(ADR 0012)*
-- Wrote a one-command kind demo and an end-to-end suite. Results: an exact **90/10 canary (450/50 of 500)**, **399/399 requests succeeding** while every v1 pod was deleted under load, and an invalid policy rejected with its `line:col` without affecting valid ones. *(`bench/results/evidence/phase6-demo-e2e.txt`)*
-- Ran the upstream Gateway API conformance suite and published the pass/fail table (29 of 40 core tests pass; not conformant), including the features not supported. *(docs/CONFORMANCE.md)*
+- Built a Kubernetes controller for Gateway API (`GatewayClass`, `Gateway`, `HTTPRoute`, `ReferenceGrant`) and a `PortcullisPolicy` CRD. A pure translation layer feeds hash-versioned config snapshots, which are acknowledged by every data-plane pod and retried with back-off. HTTPS listeners select certificates by SNI and rotate them without a restart; each Gateway gets its own Service and address on a shared data plane. *(ADR 0012, ADR 0013)*
+- Wrote a one-command kind demo and an end-to-end suite. Results: an exact **90/10 canary (450/50 of 500)**, **400/400 requests succeeding** while every v1 pod was deleted under load, and an invalid policy reported with its `line:col`. *(`bench/results/evidence/v0.3.0-e2e.txt`)*
+- Took upstream Gateway API conformance from **22 to 40 of 40 core tests** (v1.7.0, `GATEWAY-HTTP`, suite unmodified) by adding HTTPS listeners, header and redirect filters, and per-Gateway isolation. Self-run; the report is committed. *(docs/CONFORMANCE.md, `bench/results/conformance/report.yaml`)*
+- Audited the multi-tenant boundaries and fixed **7 security bugs**, each with a regression test: a path-normalisation bypass of policy denies (`//admin`), cross-namespace `route_to`, policy-name shadowing between namespaces, a broken `fail_closed` policy being skipped, a cluster-wide policy limit that one namespace could exhaust, endpoint addresses pointing the proxy at loopback or cloud metadata, and unbounded memory from split weights. *(docs/SECURITY.md, ADR 0013)*
 
 ## Talking points (no numbers needed)
 
@@ -31,4 +32,5 @@ Every number below comes from a recorded result in this repository, and the sour
 - **Why unsupported Gateway API features are rejected, not approximated:** serving a route without its header filter is silently wrong.
 - **Where the design stops:**
   - rate limits are per instance (ADR 0011);
-  - HTTPS listeners are not programmed by the controller (docs/ROADMAP.md).
+  - every Gateway shares one data-plane Deployment: separate addresses, shared resources (ADR 0013);
+  - extended Gateway API features (rewrites, mirrors, regex matches) are not built (docs/ROADMAP.md).

@@ -1,45 +1,34 @@
 # Gateway API conformance
 
-Portcullis v0.2.1 was run against the upstream Gateway API conformance suite, **v1.7.0, standard channel**, profile `GATEWAY-HTTP`, with the supported features `Gateway`, `HTTPRoute` and `ReferenceGrant` (core only). The suite ran in a Pod inside the `make demo` kind cluster (`make conformance`, `deploy/conformance.sh`).
+Portcullis v0.3.0 was run against the upstream Gateway API conformance suite, **v1.7.0, standard channel**, profile `GATEWAY-HTTP`, with the supported features `Gateway`, `HTTPRoute` and `ReferenceGrant` (core only). The suite ran unmodified, in a Pod inside the `make demo` kind cluster (`make conformance`, `deploy/conformance.sh`), against commit `3653c11`. v0.3.0 adds only documentation on top of that commit.
 
 ## Result
 
 | | Count |
 |---|---|
-| Pass | **29** |
-| Fail | **11** |
+| Pass | **40** |
+| Fail | **0** |
 | Skip (extended features not claimed) | 130 |
 
-This is a failing core profile: Portcullis is **not conformant**.
+The suite's own report reads **"GATEWAY-HTTP: Core tests succeeded."** It is self-run and has not been submitted upstream, so this is not a listed conformance claim. Extended features (redirect scheme, port and path; URL rewrites; mirrors; response header modifiers; regex and query matches; ports other than 80 and 443, and more) are neither claimed nor tested.
 
 Evidence, in `bench/results/conformance/`:
 
-- `results.txt` and `conformance.log.gz`: the full v0.2.1 run. The causes below are read from this log and from the upstream test manifests.
-- `HTTPRouteRedirectHostAndStatus/` and `HTTPRouteMultipleGateways/`: isolated v0.2.1 reruns of those two tests. An isolated rerun of `GatewayWithAttachedRoutes` was attempted and produced no result. The other failures were not rerun on v0.2.1.
-- All other per-test directories are reruns from **v0.2.0** and do not describe v0.2.1.
+- `report.yaml`: the suite's ConformanceReport.
+- `results.txt`: one line per test.
+- `conformance.log.gz`: the full log.
 
-## Failing (11), by cause
-
-| Cause | Tests | Kind |
-|---|---|---|
-| **HTTPS listeners not implemented.** They are rejected with `UnsupportedProtocol`, so certificate and Secret checks never run, and a Gateway with only HTTPS listeners is not accepted. In `GatewayWithAttachedRoutes` the two HTTP subtests pass and only the HTTPS one fails. | GatewayInvalidTLSConfiguration, GatewaySecretInvalidReferenceGrant, GatewaySecretMissingReferenceGrant, GatewaySecretReferenceGrantAllInNamespace, GatewaySecretReferenceGrantSpecific, GatewayModifyListeners, GatewayWithAttachedRoutes, HTTPRouteHTTPSListener | Missing feature |
-| **HTTPRoute filters not implemented.** Rules with filters are refused with `UnsupportedValue`. | HTTPRouteRequestHeaderModifier, HTTPRouteRedirectHostAndStatus | Missing feature |
-| **One shared data-plane address.** Routes on different Gateways collide (first match wins), so one Gateway's dedicated route is never reached. | HTTPRouteMultipleGateways | Design limit |
-
-## Passing (29)
-
-GatewayClassObservedGenerationBump, GatewayInvalidRouteKind, GatewayListenerUnsupportedProtocol, GatewayNameMaximumLength, GatewayObservedGenerationBump, GatewayPreserveForeignConditions, HTTPRouteCrossNamespace, HTTPRouteExactPathMatching, HTTPRouteHeaderMatching, HTTPRouteHostnameIntersection, HTTPRouteInvalidBackendRefUnknownKind, HTTPRouteInvalidCrossNamespaceBackendRef, HTTPRouteInvalidCrossNamespaceParentRef, HTTPRouteInvalidNonExistentBackendRef, HTTPRouteInvalidParentRefNotMatchingSectionName, HTTPRouteInvalidReferenceGrant, HTTPRouteListenerHostnameMatching, HTTPRouteMatching, HTTPRouteMatchingAcrossRoutes, HTTPRouteNoBackendRefs, HTTPRouteObservedGenerationBump, HTTPRoutePartiallyInvalidViaInvalidReferenceGrant, HTTPRoutePathMatchOrder, HTTPRoutePreserveForeignStatus, HTTPRouteReferenceGrant, HTTPRouteRuleOrder, HTTPRouteServiceTypes, HTTPRouteSimpleSameNamespace, HTTPRouteWeight.
-
-## Fixed in v0.2.1
+## What it took (v0.2.1 to v0.3.0)
 
 | Change | Tests that now pass |
 |---|---|
-| ReferenceGrant for cross-namespace backends | HTTPRouteReferenceGrant, HTTPRoutePartiallyInvalidViaInvalidReferenceGrant |
-| `allowedRoutes` namespace selectors | HTTPRouteCrossNamespace |
-| `allowedRoutes.kinds` validation | GatewayInvalidRouteKind |
-| `ResolvedRefs` on routes that are not accepted | HTTPRouteInvalidCrossNamespaceParentRef |
-| 500 for a rule without backendRefs | HTTPRouteNoBackendRefs |
-| Two parentRefs to one Gateway no longer invalidate the snapshot for every Gateway | HTTPRouteListenerHostnameMatching |
+| HTTPS listeners: certificates from Secrets (with ReferenceGrant), SNI, live rotation | GatewayInvalidTLSConfiguration, GatewaySecretInvalidReferenceGrant, GatewaySecretMissingReferenceGrant, GatewaySecretReferenceGrantAllInNamespace, GatewaySecretReferenceGrantSpecific, GatewayModifyListeners, GatewayWithAttachedRoutes, HTTPRouteHTTPSListener |
+| RequestHeaderModifier and RequestRedirect filters | HTTPRouteRequestHeaderModifier, HTTPRouteRedirectHostAndStatus |
+| One Service and address per Gateway | HTTPRouteMultipleGateways |
+
+The design is in [ADR 0013](adr/0013-listeners-tls-and-tenant-isolation.md).
+
+The conformance runner also needed two workarounds before v0.3.0, both now removed. It deleted the demo app during a run, because Gateways shared an address. It also patched the suite's HTTPS Gateway out of readiness checks, because HTTPS was not supported.
 
 ## Correction to the v0.2.0 report
 
@@ -57,6 +46,7 @@ The v0.2.0 version of this page and its commit message said that all 18 failures
 | 1 | 11 | 29 | The demo app's catch-all route answered the suite's requests. The runner now removes it for the run. |
 | 2 | 21 | 19 | Host load average about 47. |
 | 3 (v0.2.0) | 22 | 18 | With the `ListenersNotValid` fix. |
-| 4 (v0.2.1) | 29 | 11 | This page. Two earlier attempts failed on an overloaded host and are not counted. |
+| 4 (v0.2.1) | 29 | 11 | Two earlier attempts failed on an overloaded host and are not counted. |
+| 5 (v0.3.0) | **40** | **0** | This page. The suite ran unmodified, for the first time. |
 
 What remains, with no work planned, is listed in [ROADMAP.md](ROADMAP.md) under "Deferred from Phase 6".

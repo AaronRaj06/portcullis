@@ -1,0 +1,13 @@
+=== RUN   TestCanarySplit
+    e2e_test.go:66: 500 requests: map[v1:450 v2:50]
+--- PASS: TestCanarySplit (0.35s)
+=== RUN   TestPolicyBlocksPath
+--- PASS: TestPolicyBlocksPath (0.28s)
+=== RUN   TestPolicyCannotBeDodgedByPathSpelling
+--- PASS: TestPolicyCannotBeDodgedByPathSpelling (0.00s)
+=== RUN   TestInvalidPolicyFollowsOnError
+--- PASS: TestInvalidPolicyFollowsOnError (0.95s)
+=== RUN   TestFailoverWhenPodsDeleted
+    e2e_test.go:162: failover: 400 requests, map[200:400]
+--- PASS: TestFailoverWhenPodsDeleted (20.34s)
+ok  	github.com/AaronRaj06/portcullis/test/e2e	22.518s

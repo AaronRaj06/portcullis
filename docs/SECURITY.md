@@ -43,7 +43,9 @@ Report vulnerabilities privately through GitHub's "Report a vulnerability" on th
 | Hop-by-hop header smuggling (`Connection: X-Internal-Auth`) | standard hop-by-hop headers and any header named in `Connection` are stripped in both directions | `removeHopByHop` |
 | Request smuggling (CL/TE desync) | parsing is Go's `net/http`, which rejects ambiguous `Content-Length` plus `Transfer-Encoding`. The proxy never re-serialises raw bytes | stdlib |
 | Retry storms amplifying an outage | retries only on idempotent methods, capped at 5 attempts, inside a token-bucket retry budget (20% by default) | ADR 0005, `internal/lb` |
-| TLS downgrade | TLS 1.2 minimum on listeners and on upstream TLS; certificates reload from disk without a restart | `TLSConfigFrom`, `config/compile.go` |
+| TLS downgrade | TLS 1.2 minimum on listeners and on upstream TLS; certificates reload from disk without a restart, and Gateway certificates rotate on push | `baseTLS`, `config/compile.go` |
+| Path tricks around a policy (`//admin`, `/x/../admin`, `/x%2F..%2Fadmin`) | the path is cleaned before routing and policy, and the cleaned path is what goes upstream. Fixed in v0.3.0; each of those paths bypassed a `/admin` deny in v0.2.1 and earlier | `internal/proxy/path.go` |
+| Huge split weights | a weighted split's table is capped at 4,096 entries (a weight of 1,000,000 used 15 MiB per route before v0.3.0) | `lb.MaxCycle` |
 
 ### PolicyScript
 
@@ -64,6 +66,8 @@ Policies are code supplied by config authors and, through `PortcullisPolicy`, by
 
 | Threat | Defence |
 |---|---|
+| Config and private keys read on the wire | the admin API serves TLS (`-admin-tls-cert`), and the controller verifies it against a pinned CA (`-dataplane-admin-ca`). The demo creates both |
+| Private keys read through the API | `GET /config?full=1` replaces every key with `REDACTED` |
 | Unauthenticated config write | Everything except `/healthz`, `/readyz` and `/metrics` requires `Authorization: Bearer`, compared in constant time. With no token file the admin port binds to `127.0.0.1:9901` by default |
 | Token leakage | read from a file (`-admin-token-file`), never from a flag or environment variable, so it does not show in `ps` or `/proc/*/environ`. In Kubernetes it is a Secret generated at install time (`openssl rand -hex 32`) |
 | Malformed or hostile config | size limit `config.MaxSize`; strict parsing (unknown fields rejected); full validation and compilation before an atomic swap. An invalid config never replaces a working one |
@@ -76,20 +80,27 @@ Policies are code supplied by config authors and, through `PortcullisPolicy`, by
 - **Admin port isolation:** a NetworkPolicy lets only the controller reach port 9901. This depends on the CNI enforcing it.
 - **Controller RBAC (least privilege):**
   - read Gateway API objects (ReferenceGrants included), PortcullisPolicies, Namespaces, Services and EndpointSlices;
-  - write only `*/status`;
+  - `get` Secrets, but not `list` or `watch`: it reads only the certificates a listener names and is allowed to use, so it cannot enumerate the cluster's Secrets;
+  - write only `*/status`, plus Services in its own namespace (one per Gateway);
   - Leases and Events only in its own namespace.
 - **Isolation between users:**
   - A route may reference Services in another namespace only if a ReferenceGrant there allows it.
   - Listener `allowedRoutes` is honoured. With a namespace selector, whoever can label a Namespace can let its routes attach.
-  - A broken policy is rejected on its own and cannot block others.
+  - A Gateway may use a certificate Secret in another namespace only if a ReferenceGrant there allows `Gateway` → `Secret`.
+  - Each Gateway has its own Service and target ports, so a route on one Gateway cannot capture another Gateway's traffic.
+  - A policy is identified by `namespace/name`, so no other namespace can shadow it, and its `route_to` may only name pools of Services in its own namespace.
+  - A policy that does not compile closes its target's routes with 500, unless it says `onError: fail_open`: a typo in a deny rule must not remove the rule. Other namespaces' routes are not affected.
+  - The 64-policy limit is per route. Going over it closes that route only.
+  - EndpointSlice addresses that are loopback, link-local (cloud metadata), unspecified or multicast are never dialled. EndpointSlices can be written by hand, so this stops a namespace user pointing the proxy at itself or at the node.
 
 ## Known gaps (not defended)
 
 - **Distributed rate-limit bypass.** Limits are per instance, divided by `instances`. Uneven load balancing lets a client exceed the global figure, by at most a factor of the replica count. An attacker rotating more than 100,000 keys forces evictions, which reset other keys' buckets. Use a per-IP key on a trusted client address, and do not treat `rate_limit` as abuse protection against a botnet.
 - **No global connection limit or per-client concurrency limit.** A volumetric flood is left to the network layer or a cloud load balancer in front.
-- **Gateway HTTPS listeners are not programmed** by the controller (`UnsupportedProtocol`). In Kubernetes, the proxy-to-client hop is plaintext unless TLS is terminated in front. Pod-to-pod admin traffic is plaintext HTTP, protected by the bearer token and the NetworkPolicy only.
-- **Gateways are not isolated from each other.** They share one address, so a route on one Gateway can capture another's traffic for the same host and path.
-- **PortcullisPolicies share one limit of 64.** Anyone who can create more than that many valid, attached policies (fewer, with the up to three generated deny policies) makes the snapshot invalid, and config updates stop for every Gateway until some are removed. Restrict who may create them.
+- **One data-plane fleet serves every Gateway.** Gateways have separate addresses and routes but share pods, so one Gateway's load or a crash affects all of them. There is no per-Gateway resource limit.
+- **Client certificates (mTLS from clients) are not supported.** A Gateway that asks for them is refused rather than served without the check.
+- **Secrets are re-read every 15 s**, not watched (the controller may only `get` them). A rotated certificate takes up to 15 s to be served.
+- **Private keys travel in the config push**, over the admin TLS connection, and live in data-plane memory. Anyone with the admin token can read nothing back (keys are redacted) but can replace them.
 - **Response bodies are not inspected.** Policies see headers and status, never bodies.
 - **Trusted-proxy misconfiguration.** Putting a public range in `trustedProxies` lets anyone set their own client IP.
 - **The config author is all-powerful.** Anyone with the admin token, or with write access to the controller's inputs at cluster scope, can route traffic anywhere.

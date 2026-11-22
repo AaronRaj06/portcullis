@@ -299,3 +299,32 @@ A third issue was caught by design review before it shipped, and its regression 
 - **Pods refused to start:** "runAsNonRoot and image has non-numeric user (nonroot)". The kubelet can only verify a numeric UID. The Dockerfile now says `USER 65532:65532`, and the manifests set `runAsUser` too.
 - **The controller image took 13 minutes to build** on a loaded laptop (client-go is large), and any doc edit would have rebuilt it. The Dockerfile now copies only `cmd/` and `internal/` and uses a build-cache mount.
 - **Go 1.27 became the minimum**, because controller-runtime v0.25 requires it. Recorded in ADR 0001's update; CI and the Docker image moved together.
+
+## v0.3.0: Closure (listeners, HTTPS, filters, tenant isolation)
+
+### Concepts
+
+- **SNI (Server Name Indication):** the client names the host it wants in the TLS handshake, before any HTTP is sent, so one port can serve many certificates. Portcullis picks the exact name, then the longest wildcard, then a catch-all.
+- **Tenant isolation:** in a shared cluster, a namespace is a tenant. Anything one tenant writes (a route, a policy, an EndpointSlice) must not change what happens to another tenant's traffic.
+- **Fail closed:** when a security control cannot run, refuse the request rather than let it through.
+- **Path normalisation:** `//admin`, `/./admin` and `/x/../admin` all mean `/admin` to most backends. A check on the raw string sees something else.
+
+### Trade-offs
+
+- **Certificates pushed in the config vs mounted Secrets.** Pushing keeps the data plane free of Kubernetes credentials and rotates without restarts; the cost is keys in the push (over TLS) and a bigger snapshot.
+- **One Service per Gateway on shared pods vs one Deployment per Gateway.** Separate addresses and routes for a fraction of the cost; no resource isolation.
+- **Native filters vs generated PolicyScript.** Native: simpler and does not use up the policy allowance.
+- **Unsupported filter → 500, unsupported match → dropped.** Dropping a rule with a filter lets its traffic fall through to a broader rule that lacks the filter.
+
+### Likely interview questions
+
+1. **How do two Gateways get different addresses with one Deployment?** Each Gateway listener gets a target port on the data plane and a Service of its own pointing at it. The data plane keeps one router per port and never falls back to another port's routes.
+2. **How does a certificate rotate?** cert-manager updates the Secret; within 15 s the controller re-reads it and pushes a new snapshot; the next TLS handshake on that port picks the new certificate through `GetCertificate`. Open connections keep the old one.
+3. **What did the security audit find?** A `/admin` deny bypassed by `//admin`; `route_to` reaching another namespace's Service; a policy shadowed by one in another namespace with the same name; a broken `fail_closed` policy skipped; 64 policies anywhere stopping every config push; endpoints pointing at loopback or the metadata address. Each is now a regression test.
+4. **Why does a broken policy close its route instead of being ignored?** Ignoring it removes a security control because of a typo. The status says why, and `onError: fail_open` opts out.
+5. **Why not watch Secrets?** Watching needs `list`, which would let the controller read every Secret in the cluster. With `get` only, it can read just the names listeners point at.
+
+### What went wrong
+
+- **A port that changed from HTTP to HTTPS was refused by the data plane, and that refused the whole snapshot**, so every Gateway stopped getting config. Seen on the demo cluster: Services, the record of allocated ports, are written only after a successful push, so a failed push let a freed port be reused for another protocol. The listener is now rebound.
+- **Two conformance-runner workarounds became unnecessary:** removing the demo app during runs (shared address) and patching the suite's HTTPS Gateway out of readiness checks. The suite now runs unmodified.

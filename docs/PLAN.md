@@ -71,3 +71,9 @@ Task breakdown per phase. Each phase ends with: `go test -race ./...`, docs upda
 ## v0.2.1: Fixes and closure
 - [x] ReferenceGrant, namespace selectors, route kinds, status fixes; snapshot-breaking bugs
 - [x] Conformance rerun (29 of 40); v0.2.0 report corrected
+
+## v0.3.0: Closure
+- [x] HTTPS listeners with SNI and live certificate rotation; one Service and address per Gateway
+- [x] RequestHeaderModifier and RequestRedirect filters; invalid split shares answer 500
+- [x] Tenant isolation fixes (route_to, policy names, fail-closed invalid policies, per-route policy limit, endpoint addresses); path-normalisation bypass; split-table memory cap
+- [x] Admin API over TLS; private keys redacted; conformance suite run unmodified

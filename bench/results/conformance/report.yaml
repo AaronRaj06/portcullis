@@ -1,0 +1,46 @@
+apiVersion: gateway.networking.k8s.io/v1
+date: "2026-11-22T05:04:27Z"
+gatewayAPIChannel: standard
+gatewayAPIVersion: v1.7.0
+implementation:
+  contact:
+  - https://github.com/AaronRaj06/portcullis/issues
+    conformance.go:154: Conformance report:
+        apiVersion: gateway.networking.k8s.io/v1
+        date: "2026-11-22T05:04:27Z"
+        gatewayAPIChannel: standard
+        gatewayAPIVersion: v1.7.0
+        implementation:
+          contact:
+          - https://github.com/AaronRaj06/portcullis/issues
+          organization: AaronRaj06
+          project: portcullis
+          url: https://github.com/AaronRaj06/portcullis
+          version: v0.2.1-3-g3653c11
+        kind: ConformanceReport
+        mode: default
+        profiles:
+        - core:
+            result: success
+            statistics:
+              Failed: 0
+              Passed: 40
+              Skipped: 0
+  organization: AaronRaj06
+  project: portcullis
+  url: https://github.com/AaronRaj06/portcullis
+  version: v0.2.1-3-g3653c11
+kind: ConformanceReport
+mode: default
+profiles:
+- core:
+    result: success
+    statistics:
+      Failed: 0
+      Passed: 40
+      Skipped: 0
+  name: GATEWAY-HTTP
+  summary: Core tests succeeded.
+succeededProvisionalTests:
+- GatewayPreserveForeignConditions
+- HTTPRoutePreserveForeignStatus

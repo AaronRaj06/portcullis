@@ -35,6 +35,7 @@ flowchart LR
   subgraph cp[portcullis-controller]
     W[watches] --> T["Translate (pure)"] --> S[hash-versioned snapshot]
     T --> ST[status: Accepted / ResolvedRefs / Programmed]
+    T --> SV[one Service per Gateway]
   end
   GW & PP & EPS --> W
   ST --> k8s
@@ -43,7 +44,7 @@ flowchart LR
     A1[admin :9901] --> SN1["atomic.Pointer(snapshot)"]
     A2[admin :9901] --> SN2["atomic.Pointer(snapshot)"]
   end
-  C((client)) --> P[proxy :8080]
+  C((client)) --> P["one listener per Gateway port (HTTP / HTTPS + SNI)"]
   P --> R[router: host, path, header, method] --> POL[PolicyScript] --> LB[load balancer + health + retries]
   LB --> U1[pods v1] & U2[pods v2]
   SN1 -.-> R
@@ -88,8 +89,8 @@ All results are from one Apple M1 laptop running everything in Docker; see [docs
 | Backend killed under 1,000 req/s (3 runs) | **0 failed requests of 89,990**; re-admitted in 240–464 ms (NGINX: 0 failed, 1.2–1.8 s) |
 | 100 config reloads under load (10 invalid) | **0 failed requests** |
 | PolicyScript, 5-rule example | **372 ns, 1 allocation**; fuzzed for 9.6M executions with no failures |
-| Kubernetes demo (`make e2e`) | 90/10 canary 450/50 of 500; 399/399 requests succeed while every v1 pod is deleted |
-| Gateway API conformance | **29 of 40** core tests pass (not conformant: no HTTPS listeners or filters, one shared address); see [docs/CONFORMANCE.md](docs/CONFORMANCE.md) |
+| Kubernetes demo (`make e2e`) | 90/10 canary 450/50 of 500; 400/400 requests succeed while every v1 pod is deleted |
+| Gateway API conformance (v1.7.0, `GATEWAY-HTTP` core) | **40 of 40** pass, suite unmodified ("Core tests succeeded"; self-run, not submitted upstream); see [docs/CONFORMANCE.md](docs/CONFORMANCE.md) |
 
 ## Design decisions
 
@@ -102,7 +103,9 @@ All results are from one Apple M1 laptop running everything in Docker; see [docs
 | PolicyScript has no loops, no I/O, and step and time budgets | a policy written by a namespace user must not be able to hang or attack the proxy | [0010](docs/adr/0010-policyscript-design.md) |
 | Rate limits are per instance, divided by the replica count | no shared store on the request path; approximate by design | [0011](docs/adr/0011-policy-gaps-closed.md) |
 | Controller: one work-queue key, full rebuild, pure `Translate` | every data plane always gets one consistent snapshot; semantics unit-tested without a cluster | [0012](docs/adr/0012-controller-design.md) |
-| Unsupported Gateway API features are rejected with a reason, not approximated | serving a route without its header filter would be silently wrong | [0012](docs/adr/0012-controller-design.md) |
+| Unsupported Gateway API features are rejected with a reason, not approximated; a rule with an unknown filter answers 500 | serving a route without its header filter would be silently wrong | [0012](docs/adr/0012-controller-design.md), [0013](docs/adr/0013-listeners-tls-and-tenant-isolation.md) |
+| One Service and target port per Gateway, certificates pushed with the config | Gateways get separate addresses without a Deployment each; the data plane never needs Kubernetes credentials | [0013](docs/adr/0013-listeners-tls-and-tenant-isolation.md) |
+| Namespaces are tenants: policies are scoped to theirs, and a broken policy closes its own routes | one team's typo or mistake must not open or break another team's traffic | [0013](docs/adr/0013-listeners-tls-and-tenant-isolation.md) |
 
 All ADRs are in [docs/adr/](docs/adr/). The threat model is [docs/SECURITY.md](docs/SECURITY.md); what is not built yet is [docs/ROADMAP.md](docs/ROADMAP.md).
 
