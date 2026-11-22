@@ -2,7 +2,6 @@ package controller
 
 import (
 	"fmt"
-	"slices"
 	"strings"
 	"testing"
 
@@ -91,7 +90,7 @@ func TestCanarySplitWithEndpoints(t *testing.T) {
 		t.Fatalf("config: %+v", out.Config)
 	}
 	r := out.Config.Routes[0]
-	if r.Name != "default/gw/default/app/r0/m0" || r.Hosts[0] != "app.example.com" || r.Path != "/" ||
+	if r.Name != "default/gw:80/default/app/r0/m0" || r.Hosts[0] != "app.example.com" || r.Path != "/" ||
 		r.Backends[0].Pool != "default/v1:80" || *r.Backends[0].Weight != 90 || *r.Backends[1].Weight != 10 {
 		t.Fatalf("route: %+v", r)
 	}
@@ -153,10 +152,10 @@ func TestMatchesAndRejections(t *testing.T) {
 	var names []string
 	for _, r := range out.Config.Routes {
 		names = append(names, r.Name)
-		if r.Name == "default/gw/default/mixed/r0/m0" && (r.PathType != "Exact" || r.Path != "/login" || r.Methods[0] != "GET") {
+		if r.Name == "default/gw:80/default/mixed/r0/m0" && (r.PathType != "Exact" || r.Path != "/login" || r.Methods[0] != "GET") {
 			t.Fatalf("exact match: %+v", r)
 		}
-		if r.Name == "default/gw/default/mixed/r0/m1" && (r.Headers[0].Name != "X-Beta" || r.Path != "/") {
+		if r.Name == "default/gw:80/default/mixed/r0/m1" && (r.Headers[0].Name != "X-Beta" || r.Path != "/") {
 			t.Fatalf("header match: %+v", r)
 		}
 	}
@@ -171,15 +170,8 @@ func TestMatchesAndRejections(t *testing.T) {
 	if c := condition(t, missing, "ResolvedRefs"); c.Reason != "BackendNotFound" {
 		t.Fatalf("missing: %+v", c)
 	}
-	// A route with no valid backend answers 500 by a generated policy.
-	found := false
-	for _, p := range out.Config.Policies {
-		if strings.Contains(p.Script, "deny(500") && slices.Contains(p.Routes, "default/gw/default/missing/r0/m0") {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("no deny(500) policy for the unresolved route: %+v", out.Config.Policies)
+	if p := onlyPool(t, out.Config, "default/gw:80/default/missing/r0/m0"); p != pool500 {
+		t.Fatalf("unresolved route goes to %s, want 500", p)
 	}
 }
 
@@ -189,8 +181,8 @@ func TestNoEndpointsIs503AndNoRoutesIs404(t *testing.T) {
 		Routes:   []gwv1.HTTPRoute{httpRoute("r", nil, gwv1.HTTPRouteRule{BackendRefs: []gwv1.HTTPBackendRef{backendRef("web", 80, 1)}})}}
 	out := Translate(in)
 	mustValidate(t, out.Config)
-	if len(out.Config.Policies) != 1 || !strings.Contains(out.Config.Policies[0].Script, "deny(503") {
-		t.Fatalf("policies %+v", out.Config.Policies)
+	if p := onlyPool(t, out.Config, "default/gw:80/default/r/r0/m0"); p != pool503 {
+		t.Fatalf("no endpoints goes to %s, want 503", p)
 	}
 	empty := Translate(Inputs{Classes: []gwv1.GatewayClass{class()}, Gateways: []gwv1.Gateway{gateway()}})
 	mustValidate(t, empty.Config)
@@ -202,7 +194,7 @@ func TestNoEndpointsIs503AndNoRoutesIs404(t *testing.T) {
 func TestListenerHostnamesAndClasses(t *testing.T) {
 	wild := gwv1.Hostname("*.example.com")
 	gw := gateway(gwv1.Listener{Name: "web", Port: 80, Protocol: gwv1.HTTPProtocolType, Hostname: &wild},
-		gwv1.Listener{Name: "tls", Port: 443, Protocol: gwv1.HTTPSProtocolType})
+		gwv1.Listener{Name: "tls", Port: 443, Protocol: gwv1.TLSProtocolType})
 	foreign := gwv1.Gateway{ObjectMeta: om("default", "theirs"), Spec: gwv1.GatewaySpec{GatewayClassName: "other"}}
 	in := Inputs{Classes: []gwv1.GatewayClass{class()}, Gateways: []gwv1.Gateway{gw, foreign},
 		Services: []corev1.Service{service("web", 80)}, Slices: []discoveryv1.EndpointSlice{slice("web", 80, true, "10.0.0.1")},
@@ -217,7 +209,7 @@ func TestListenerHostnamesAndClasses(t *testing.T) {
 	}
 	g := out.Gateways[types.NamespacedName{Namespace: "default", Name: "gw"}]
 	if c := condition(t, g.Listeners[1].Conditions, "Accepted"); c.Reason != "UnsupportedProtocol" {
-		t.Fatalf("https listener: %+v", c)
+		t.Fatalf("tls listener: %+v", c)
 	}
 	if c := condition(t, g.Conditions, "Accepted"); c.Status != metav1.ConditionTrue || c.Reason != "ListenersNotValid" {
 		t.Fatalf("gateway with one bad listener: %+v", c)
@@ -245,9 +237,10 @@ func TestPolicies(t *testing.T) {
 			pol("dup", "HTTPRoute", "app", `policy "block-admin" { on request { } }`),
 			pol("orphan", "HTTPRoute", "nope", `policy "orphan" { on request { } }`),
 		}}
+	in.Policies[2].Spec.OnError = "fail_open" // fail_closed is tested in security_test.go
 	out := Translate(in)
 	mustValidate(t, out.Config)
-	want := map[string]string{"block-admin": "Accepted", "gw-wide": "Accepted", "broken": "Invalid", "dup": "Conflicted", "orphan": "TargetNotFound"}
+	want := map[string]string{"block-admin": "Accepted", "gw-wide": "Accepted", "broken": "Invalid", "dup": "Accepted", "orphan": "TargetNotFound"}
 	for name, reason := range want {
 		c := condition(t, out.Policies[types.NamespacedName{Namespace: "default", Name: name}], "Accepted")
 		if c.Reason != reason {
@@ -258,7 +251,7 @@ func TestPolicies(t *testing.T) {
 		t.Errorf("broken: message %q should carry line:col", c.Message)
 	}
 	// Gateway-wide policies run first.
-	if len(out.Config.Policies) != 2 || !strings.HasPrefix(out.Config.Policies[0].Script, `policy "gw"`) {
+	if len(out.Config.Policies) != 3 || !strings.HasPrefix(out.Config.Policies[0].Script, `policy "gw"`) {
 		t.Fatalf("attached policies: %+v", out.Config.Policies)
 	}
 }
@@ -315,12 +308,8 @@ func TestAllowedRoutesAndReferenceGrants(t *testing.T) {
 	if c := condition(t, st, "ResolvedRefs"); c.Reason != "RefNotPermitted" { // reported even when not attached
 		t.Fatalf("refused refs: %+v", c)
 	}
-	found := false
-	for _, p := range out.Config.Policies {
-		found = found || (slices.Contains(p.Routes, "default/gw/team-a/empty/r0/m0") && strings.Contains(p.Script, "deny(500"))
-	}
-	if !found {
-		t.Fatalf("no deny(500) for a rule without backendRefs: %+v", out.Config.Policies)
+	if p := onlyPool(t, out.Config, "default/gw:80/team-a/empty/r0/m0"); p != pool500 {
+		t.Fatalf("rule without backendRefs goes to %s, want 500", p)
 	}
 }
 
@@ -345,7 +334,7 @@ func TestRouteWithTwoParentRefsToOneGateway(t *testing.T) {
 
 func TestRouteOnUnacceptedGatewayReportsResolvedRefs(t *testing.T) {
 	out := Translate(Inputs{Classes: []gwv1.GatewayClass{class()},
-		Gateways: []gwv1.Gateway{gateway(gwv1.Listener{Name: "tls", Port: 443, Protocol: gwv1.HTTPSProtocolType})},
+		Gateways: []gwv1.Gateway{gateway(gwv1.Listener{Name: "tls", Port: 443, Protocol: gwv1.TLSProtocolType})},
 		Routes:   []gwv1.HTTPRoute{httpRoute("r", nil, gwv1.HTTPRouteRule{BackendRefs: []gwv1.HTTPBackendRef{backendRef("nope", 80, 1)}})}})
 	st := out.Routes[types.NamespacedName{Namespace: "default", Name: "r"}][0].Conditions
 	if c := condition(t, st, "ResolvedRefs"); c.Reason != "BackendNotFound" {
@@ -353,32 +342,31 @@ func TestRouteOnUnacceptedGatewayReportsResolvedRefs(t *testing.T) {
 	}
 }
 
-// Generated deny policies must neither exhaust config.MaxPolicies nor be
-// shadowed by a user's policy of the same name.
-func TestGeneratedPoliciesCannotBreakTheSnapshot(t *testing.T) {
+// Broken routes use none of the policy allowance, however many there are.
+func TestBrokenRoutesCannotBreakTheSnapshot(t *testing.T) {
 	var routes []gwv1.HTTPRoute
 	for i := range config.MaxPolicies + 1 {
 		routes = append(routes, httpRoute(fmt.Sprintf("r%d", i), nil, gwv1.HTTPRouteRule{}))
 	}
-	in := Inputs{Classes: []gwv1.GatewayClass{class()}, Gateways: []gwv1.Gateway{gateway()}, Routes: routes}
-	out := Translate(in)
+	out := Translate(Inputs{Classes: []gwv1.GatewayClass{class()}, Gateways: []gwv1.Gateway{gateway()}, Routes: routes})
 	mustValidate(t, out.Config)
-	n := 0
-	for _, p := range out.Config.Policies {
-		if strings.Contains(p.Script, "deny(500") {
-			n += len(p.Routes)
+	if len(out.Config.Routes) != len(routes) || len(out.Config.Policies) != 0 {
+		t.Fatalf("%d routes, %d policies", len(out.Config.Routes), len(out.Config.Policies))
+	}
+	for _, r := range out.Config.Routes {
+		if r.Backends[0].Pool != pool500 {
+			t.Fatalf("%s does not answer 500", r.Name)
 		}
 	}
-	if n != len(routes) {
-		t.Fatalf("%d of %d routes deny", n, len(routes))
-	}
+}
 
-	in.Policies = []v1alpha1.PortcullisPolicy{{ObjectMeta: om("default", "clash"), Spec: v1alpha1.PolicySpec{
-		TargetRef: v1alpha1.TargetRef{Kind: "Gateway", Name: "gw"},
-		Script:    `policy "portcullis:deny-500-no-backends" { on request { deny(403, "x") } }`}}}
-	out = Translate(in)
-	mustValidate(t, out.Config)
-	if c := condition(t, out.Policies[types.NamespacedName{Namespace: "default", Name: "clash"}], "Accepted"); c.Reason != "Conflicted" {
-		t.Fatalf("clash: %+v", c)
+func onlyPool(t *testing.T, c *config.Config, route string) string {
+	t.Helper()
+	for _, r := range c.Routes {
+		if r.Name == route && len(r.Backends) == 1 {
+			return r.Backends[0].Pool
+		}
 	}
+	t.Fatalf("no route %s with one pool in %+v", route, c.Routes)
+	return ""
 }

@@ -58,6 +58,8 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 		listen      = fs.String("listen", ":8080", "proxy listen address")
 		adminListen = fs.String("admin-listen", "127.0.0.1:9901", "admin listen address")
 		tokenFile   = fs.String("admin-token-file", "", "file holding the admin bearer token (default: no auth; keep the admin port on localhost)")
+		adminCert   = fs.String("admin-tls-cert", "", "serve the admin API over TLS with this certificate (and -admin-tls-key); needed when configs carry private keys")
+		adminKey    = fs.String("admin-tls-key", "", "key for -admin-tls-cert")
 		pprofOn     = fs.Bool("pprof", false, "serve /debug/pprof/ on the admin port")
 		certFile    = fs.String("tls-cert", "", "TLS certificate file (enables HTTPS with -tls-key)")
 		keyFile     = fs.String("tls-key", "", "TLS private key file")
@@ -113,6 +115,13 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 		}
 		tlsCfg = proxy.TLSConfigFrom(certs)
 	}
+	var adminTLS *tls.Config
+	if *adminCert != "" || *adminKey != "" {
+		var err error
+		if adminTLS, err = proxy.TLSConfig(*adminCert, *adminKey); err != nil {
+			return fmt.Errorf("-admin-tls-cert: %w", err)
+		}
+	}
 	token := ""
 	if *tokenFile != "" {
 		data, err := os.ReadFile(*tokenFile)
@@ -140,7 +149,13 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	host, _, err := net.SplitHostPort(*listen)
+	if err != nil {
+		return fmt.Errorf("-listen: %w", err)
+	}
 	mgr := config.NewManager(ctx, h, l, *configFile, logger, m)
+	mgr.Listeners = proxy.NewListeners(h, host, l, *drain)
+	defer mgr.Listeners.Close()
 	if *configFile != "" {
 		if _, err := mgr.Reload(); err != nil {
 			return fmt.Errorf("-config: %w", err)
@@ -157,7 +172,7 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	}
 
 	adm := &admin.Server{Manager: mgr, Gatherer: reg, Token: token, Pprof: *pprofOn}
-	adminSrv := &http.Server{Handler: adm.Handler(), ReadHeaderTimeout: 5 * time.Second}
+	adminSrv := &http.Server{Handler: adm.Handler(), ReadHeaderTimeout: 5 * time.Second, TLSConfig: adminTLS}
 
 	pl, err := net.Listen("tcp", *listen)
 	if err != nil {
@@ -214,6 +229,7 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	case <-ctx.Done(): // signal: fail readiness first, then drain the proxy
 		adm.SetDraining()
 		stopProxy()
+		mgr.Listeners.Close()
 		errs = append(errs, <-proxyErr)
 	case err := <-proxyErr: // the proxy server died
 		errs = append(errs, err)

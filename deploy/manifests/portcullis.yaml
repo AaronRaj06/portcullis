@@ -1,6 +1,7 @@
 # Portcullis control plane and data plane as separate Deployments.
-# The admin token Secret (portcullis-admin-token, key "token") is created by
-# deploy/demo.sh, so no credential is committed.
+# deploy/demo.sh creates the two Secrets, so no credential is committed:
+#   portcullis-admin-token  key "token"
+#   portcullis-admin-tls    a TLS pair for the name portcullis-admin (its tls.crt is the CA)
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -38,6 +39,10 @@ rules:
   - apiGroups: [""]
     resources: [services, namespaces]
     verbs: [get, list, watch]
+  # `get` only: it reads the certificates listeners name and cannot list or watch Secrets.
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [get]
   - apiGroups: [discovery.k8s.io]
     resources: [endpointslices]
     verbs: [get, list, watch]
@@ -46,6 +51,21 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata: {name: portcullis-controller}
 roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: portcullis-controller}
+subjects: [{kind: ServiceAccount, name: portcullis-controller, namespace: portcullis-system}]
+---
+# One Service per Gateway, written in its own namespace only.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: portcullis-controller-services, namespace: portcullis-system}
+rules:
+  - apiGroups: [""]
+    resources: [services]
+    verbs: [create, update, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: portcullis-controller-services, namespace: portcullis-system}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: portcullis-controller-services}
 subjects: [{kind: ServiceAccount, name: portcullis-controller, namespace: portcullis-system}]
 ---
 # Leader election, in its own namespace only.
@@ -85,13 +105,19 @@ spec:
             - -dataplane-admin-service=portcullis-system/portcullis-admin
             - -dataplane-service=portcullis-system/portcullis
             - -admin-token-file=/var/run/portcullis/token
+            - -dataplane-admin-ca=/var/run/portcullis-ca/tls.crt
           ports: [{name: metrics, containerPort: 8081}, {name: probes, containerPort: 8082}]
           livenessProbe: {httpGet: {path: /healthz, port: probes}}
           readinessProbe: {httpGet: {path: /readyz, port: probes}}
           resources: {requests: {cpu: 50m, memory: 64Mi}, limits: {memory: 256Mi}}
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
-          volumeMounts: [{name: token, mountPath: /var/run/portcullis, readOnly: true}]
-      volumes: [{name: token, secret: {secretName: portcullis-admin-token}}]
+          volumeMounts:
+            - {name: token, mountPath: /var/run/portcullis, readOnly: true}
+            - {name: admin-ca, mountPath: /var/run/portcullis-ca, readOnly: true}
+      volumes:
+        - {name: token, secret: {secretName: portcullis-admin-token}}
+        # the certificate only: the controller has no use for the key
+        - {name: admin-ca, secret: {secretName: portcullis-admin-tls, items: [{key: tls.crt, path: tls.crt}]}}
 ---
 # ---------------------------------------------------------------- data plane
 apiVersion: v1
@@ -121,15 +147,23 @@ spec:
             - -listen=:8080
             - -admin-listen=:9901
             - -admin-token-file=/var/run/portcullis/token
+            - -admin-tls-cert=/var/run/portcullis-tls/tls.crt
+            - -admin-tls-key=/var/run/portcullis-tls/tls.key
             - -log-level=warn
           ports: [{name: http, containerPort: 8080}, {name: admin, containerPort: 9901}]
-          readinessProbe: {httpGet: {path: /readyz, port: admin}, periodSeconds: 2}
-          livenessProbe: {httpGet: {path: /healthz, port: admin}}
+          readinessProbe: {httpGet: {path: /readyz, port: admin, scheme: HTTPS}, periodSeconds: 2}
+          livenessProbe: {httpGet: {path: /healthz, port: admin, scheme: HTTPS}}
           resources: {requests: {cpu: 100m, memory: 64Mi}, limits: {memory: 256Mi}}
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
-          volumeMounts: [{name: token, mountPath: /var/run/portcullis, readOnly: true}]
-      volumes: [{name: token, secret: {secretName: portcullis-admin-token}}]
+          volumeMounts:
+            - {name: token, mountPath: /var/run/portcullis, readOnly: true}
+            - {name: admin-tls, mountPath: /var/run/portcullis-tls, readOnly: true}
+      volumes:
+        - {name: token, secret: {secretName: portcullis-admin-token}}
+        - {name: admin-tls, secret: {secretName: portcullis-admin-tls}}
 ---
+# Its selector is copied onto every Gateway's Service. It carries no Gateway's
+# traffic itself; the demo points its NodePort at the demo Gateway's target port.
 apiVersion: v1
 kind: Service
 metadata: {name: portcullis, namespace: portcullis-system}
@@ -157,6 +191,6 @@ spec:
   podSelector: {matchLabels: {app: portcullis}}
   policyTypes: [Ingress]
   ingress:
-    - ports: [{port: 8080}]
+    - ports: [{port: 8080}, {port: 10000, endPort: 19999}] # 10000-19999: Gateway listeners
     - from: [{podSelector: {matchLabels: {app: portcullis-controller}}}]
       ports: [{port: 9901}]

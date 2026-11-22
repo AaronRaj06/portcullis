@@ -158,10 +158,12 @@ func TLSConfig(certFile, keyFile string) (*tls.Config, error) {
 // TLSConfigFrom is the one place TLS policy lives. CurvePreferences is left nil on
 // purpose: Go's default list prefers the post-quantum hybrid X25519MLKEM768
 // (Go 1.24+), so clients that support it already get it.
-func TLSConfigFrom(r *CertReloader) *tls.Config {
+func TLSConfigFrom(r *CertReloader) *tls.Config { return baseTLS(r.GetCertificate) }
+
+func baseTLS(get func(*tls.ClientHelloInfo) (*tls.Certificate, error)) *tls.Config {
 	return &tls.Config{
 		MinVersion:     tls.VersionTLS12,
-		GetCertificate: r.GetCertificate,
+		GetCertificate: get,
 		// TLS 1.2 only (1.3 suites are fixed by Go): forward-secret AEAD suites.
 		CipherSuites: []uint16{
 			tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,

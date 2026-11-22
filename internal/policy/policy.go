@@ -18,6 +18,7 @@ const (
 
 // Options configure Compile.
 type Options struct {
+	Name     string        // replaces the script's policy name as the program's identity, if set
 	MaxSteps int           // 0: DefaultMaxSteps
 	Timeout  time.Duration // 0: DefaultTimeout
 	FailOpen bool          // on a runtime error, skip the policy instead of answering 500
@@ -68,6 +69,9 @@ func Compile(src string, o Options) (*Program, error) {
 	}
 	if o.Timeout <= 0 {
 		o.Timeout = DefaultTimeout
+	}
+	if o.Name != "" {
+		s.name = o.Name
 	}
 	c := &checker{name: s.name, o: o, pools: o.Pools}
 	p := &Program{Name: s.name, FailOpen: o.FailOpen, maxSteps: o.MaxSteps, timeout: o.Timeout, hasReq: s.hasReq, hasResp: s.hasResp}

@@ -18,6 +18,7 @@ import (
 type Pusher struct {
 	Client *http.Client
 	Token  string // bearer token shared with the data planes
+	TLS    bool   // the admin APIs are HTTPS, and Client verifies them
 }
 
 // Snapshot is a validated config, its canonical JSON and its hash, the value
@@ -61,7 +62,11 @@ func (p *Pusher) Push(ctx context.Context, endpoints []string, s *Snapshot) erro
 func (p *Pusher) pushOne(ctx context.Context, ep string, s *Snapshot) error {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, "http://"+ep+"/config", bytes.NewReader(s.Body))
+	scheme := "http://"
+	if p.TLS {
+		scheme = "https://"
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, scheme+ep+"/config", bytes.NewReader(s.Body))
 	if err != nil {
 		return err
 	}

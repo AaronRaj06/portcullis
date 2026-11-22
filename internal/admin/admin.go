@@ -3,7 +3,7 @@
 //	GET  /healthz       liveness: the process is up
 //	GET  /readyz        readiness: a config is serving and we are not draining
 //	GET  /metrics       Prometheus
-//	GET  /config        current version, hash and generation (?full=1 adds the config); ETag = hash
+//	GET  /config        current version, hash and generation (?full=1 adds the config, without private keys); ETag = hash
 //	PUT  /config        push a new config (JSON or YAML); validated before it is swapped in.
 //	                    With If-Match: "<hash>" it applies only over that config (else 412).
 //	POST /reload        re-read the config file
@@ -99,7 +99,7 @@ func (s *Server) getConfig(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, struct {
 		config.Status
 		Config *config.Config `json:"config"`
-	}{st, s.Manager.Config()})
+	}{st, s.Manager.Config().Redacted()})
 }
 
 // putConfig is how the controller pushes snapshots. The response is the

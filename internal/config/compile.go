@@ -51,6 +51,10 @@ func Compile(c *Config, l proxy.Limits, prev *proxy.Snapshot, reuse map[string]*
 	out := &Compiled{Transports: map[string]*http.Transport{}}
 	pools := map[string]*lb.Pool{}
 	for _, pc := range c.Pools {
+		if pc.Status != 0 {
+			pools[pc.Name] = &lb.Pool{Name: pc.Name, Status: pc.Status}
+			continue
+		}
 		p := &lb.Pool{Name: pc.Name, Scheme: pc.Scheme, Panic: *pc.Panic}
 		for _, bc := range pc.Backends {
 			b := lb.NewBackend(bc.Address, bc.Weight)
@@ -97,7 +101,7 @@ func Compile(c *Config, l proxy.Limits, prev *proxy.Snapshot, reuse map[string]*
 		return nil, err
 	}
 
-	routes := make([]proxy.Route, 0, len(c.Routes))
+	byPort := map[int][]proxy.Route{}
 	for _, rc := range c.Routes {
 		r := proxy.Route{Name: rc.Name, Hosts: rc.Hosts, Path: rc.Path, Exact: rc.PathType == "Exact", Methods: rc.Methods,
 			Policies: progs[rc.Name]}
@@ -111,17 +115,51 @@ func Compile(c *Config, l proxy.Limits, prev *proxy.Snapshot, reuse map[string]*
 				r.Split = append(r.Split, proxy.WeightedPool{Pool: pools[ref.Pool], Weight: *ref.Weight})
 			}
 		}
-		routes = append(routes, r)
+		if e := rc.RequestHeaders; e != nil {
+			r.Edit = &proxy.HeaderEdit{Set: canonical(e.Set), Add: canonical(e.Add)}
+			for _, k := range e.Remove {
+				r.Edit.Remove = append(r.Edit.Remove, http.CanonicalHeaderKey(k))
+			}
+		}
+		if d := rc.Redirect; d != nil {
+			r.Redirect = &proxy.Redirect{Scheme: d.Scheme, Host: d.Host, Port: d.Port, Status: d.Status}
+		}
+		byPort[rc.Port] = append(byPort[rc.Port], r)
 	}
-	router, err := proxy.NewRouter(routes)
+	newRouter := func(port int) (*proxy.Router, error) {
+		if len(byPort[port]) == 0 {
+			return &proxy.Router{}, nil // a listener without routes answers 404
+		}
+		r, err := proxy.NewRouter(byPort[port])
+		if err != nil {
+			return nil, &ValidationError{Problems: []string{"routes: " + err.Error()}}
+		}
+		return r, nil
+	}
+	router, err := newRouter(0)
 	if err != nil {
-		return nil, &ValidationError{Problems: []string{"routes: " + err.Error()}}
+		return nil, err
+	}
+	ports := map[int]*proxy.Port{}
+	for _, lc := range c.Listeners {
+		p := &proxy.Port{}
+		if p.Router, err = newRouter(lc.Port); err != nil {
+			return nil, err
+		}
+		for _, cc := range lc.Certificates {
+			cert, err := tls.X509KeyPair([]byte(cc.Cert), []byte(cc.Key))
+			if err != nil { // validated above
+				return nil, fmt.Errorf("listener %d: %w", lc.Port, err)
+			}
+			p.Certs = append(p.Certs, proxy.Cert{Host: strings.ToLower(cc.Host), Cert: &cert})
+		}
+		ports[lc.Port] = p
 	}
 	trusted := make([]netip.Prefix, 0, len(c.TrustedProxies))
 	for _, s := range c.TrustedProxies {
 		trusted = append(trusted, netip.MustParsePrefix(s).Masked()) // validated above
 	}
-	out.Snapshot = &proxy.Snapshot{Router: router, TrustedProxies: trusted, Pools: pools, Limiters: limiters,
+	out.Snapshot = &proxy.Snapshot{Router: router, Ports: ports, TrustedProxies: trusted, Pools: pools, Limiters: limiters,
 		Version: c.Version, Hash: c.hashWith(files)}
 	return out, nil
 }
@@ -165,6 +203,14 @@ func compilePolicies(c *Config, pools map[string]*lb.Pool, prev *proxy.Snapshot)
 		}
 	}
 	return byRoute, limiters, nil
+}
+
+func canonical(hs []HeaderMatch) []proxy.HeaderMatch {
+	out := make([]proxy.HeaderMatch, 0, len(hs))
+	for _, h := range hs {
+		out = append(out, proxy.HeaderMatch{Name: http.CanonicalHeaderKey(h.Name), Value: h.Value})
+	}
+	return out
 }
 
 func balancer(name, hashKey string, bs []*lb.Backend) (lb.Balancer, error) {

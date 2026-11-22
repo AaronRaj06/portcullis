@@ -1,9 +1,13 @@
 package controller
 
 import (
+	"maps"
+	"time"
+
 	"context"
 	"errors"
 	"fmt"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"net"
 	"slices"
 	"strconv"
@@ -25,6 +29,10 @@ import (
 	"github.com/AaronRaj06/portcullis/internal/controller/v1alpha1"
 )
 
+// certRefresh is how often referenced Secrets are re-read. The controller may
+// only `get` Secrets, so it cannot watch them, or list the cluster's.
+const certRefresh = 15 * time.Second
+
 // Reconciler rebuilds the whole desired state on every change. There is one
 // work-queue key, so changes that arrive together are reconciled once, and the
 // data planes always receive one consistent snapshot. Failed pushes are retried
@@ -37,7 +45,8 @@ type Reconciler struct {
 	Pusher       *Pusher
 	AdminService types.NamespacedName // headless/not-ready-publishing Service selecting data-plane pods
 	AdminPort    int32
-	ProxyService types.NamespacedName // its address is reported on Gateways
+	ProxyService types.NamespacedName // its selector and namespace are used for every Gateway's Service
+	Secrets      client.Reader        // uncached, so that `get` is the only RBAC verb needed
 }
 
 var allKey = reconcile.Request{NamespacedName: types.NamespacedName{Name: "portcullis"}}
@@ -77,7 +86,21 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 		}
 	}
 	endpoints := r.dataPlanes(eps.Items)
-	out := Translate(Inputs{Classes: classes.Items, Gateways: gateways.Items, Routes: routes.Items, Services: services.Items,
+	var again reconcile.Result
+	secrets := map[types.NamespacedName]*corev1.Secret{}
+	// shortcut: one GET per referenced Secret each reconcile; cache them if there are hundreds.
+	for _, key := range secretRefs(classes.Items, gateways.Items, grants.Items) {
+		again.RequeueAfter = certRefresh
+		s := &corev1.Secret{}
+		switch err := r.Secrets.Get(ctx, key, s); {
+		case err == nil:
+			secrets[key] = s
+		case !apierrors.IsNotFound(err):
+			return reconcile.Result{}, fmt.Errorf("secret %s: %w", key, err)
+		}
+	}
+	out := Translate(Inputs{Secrets: secrets, SystemNamespace: r.ProxyService.Namespace,
+		Classes: classes.Items, Gateways: gateways.Items, Routes: routes.Items, Services: services.Items,
 		Slices: eps.Items, Policies: policies.Items, Grants: grants.Items, Namespaces: nss.Items, Instances: len(endpoints)})
 
 	snap, err := NewSnapshot(out.Config)
@@ -87,8 +110,16 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 	if err == nil {
 		log.Info("config pushed", "hash", snap.Hash[:12], "dataplanes", len(endpoints), "routes", len(out.Config.Routes))
 	}
-	statusErr := r.writeStatus(ctx, out, &classes, &gateways, &routes, &policies, services.Items, err)
-	return reconcile.Result{}, errors.Join(err, statusErr)
+	var synced map[types.NamespacedName]serviceState
+	var syncErr error
+	if err == nil { // only after the push: a Service must not point at a port that is not open
+		synced, syncErr = r.syncServices(ctx, out, services.Items)
+	}
+	statusErr := r.writeStatus(ctx, out, &classes, &gateways, &routes, &policies, synced, err)
+	if err := errors.Join(err, syncErr, statusErr); err != nil {
+		return reconcile.Result{}, err
+	}
+	return again, nil
 }
 
 // dataPlanes lists the admin endpoints of every data-plane pod. Not-ready pods
@@ -139,7 +170,7 @@ func merge(have, want []metav1.Condition) []metav1.Condition {
 }
 
 func (r *Reconciler) writeStatus(ctx context.Context, out *Output, classes *gwv1.GatewayClassList, gateways *gwv1.GatewayList,
-	routes *gwv1.HTTPRouteList, policies *v1alpha1.PortcullisPolicyList, services []corev1.Service, pushErr error) error {
+	routes *gwv1.HTTPRouteList, policies *v1alpha1.PortcullisPolicyList, synced map[types.NamespacedName]serviceState, pushErr error) error {
 	var errs []error
 	update := func(obj client.Object, changed bool) {
 		if changed {
@@ -157,7 +188,6 @@ func (r *Reconciler) writeStatus(ctx context.Context, out *Output, classes *gwv1
 			update(c, changed)
 		}
 	}
-	addrs := r.addresses(services)
 	for i := range gateways.Items {
 		g := &gateways.Items[i]
 		res, ok := out.Gateways[nsName(g)]
@@ -166,12 +196,19 @@ func (r *Reconciler) writeStatus(ctx context.Context, out *Output, classes *gwv1
 		}
 		next := g.Status.DeepCopy()
 		accepted := meta.IsStatusConditionTrue(res.Conditions, string(gwv1.GatewayConditionAccepted))
-		prog := programmed(pushErr, g.Generation)
-		if !accepted {
+		svc := synced[nsName(g)]
+		prog := programmed(errors.Join(pushErr, svc.err), g.Generation)
+		serves := slices.Contains(slices.Collect(maps.Values(res.Programmable)), true)
+		switch {
+		case accepted && !serves:
+			prog = cond(string(gwv1.GatewayConditionProgrammed), string(gwv1.GatewayReasonInvalid), false, g.Generation, "no listener has a usable certificate")
+		case !accepted:
 			prog = cond(string(gwv1.GatewayConditionProgrammed), string(gwv1.GatewayReasonInvalid), false, g.Generation, "the Gateway is not accepted")
 		}
 		next.Conditions = merge(next.Conditions, append(slices.Clone(res.Conditions), prog))
-		next.Addresses = addrs
+		if pushErr == nil { // otherwise keep the address it already has
+			next.Addresses = svc.addresses
+		}
 		listeners := make([]gwv1.ListenerStatus, len(res.Listeners))
 		for j, ls := range res.Listeners {
 			var have []metav1.Condition
@@ -181,8 +218,8 @@ func (r *Reconciler) writeStatus(ctx context.Context, out *Output, classes *gwv1
 				}
 			}
 			lp := prog
-			if !meta.IsStatusConditionTrue(ls.Conditions, string(gwv1.ListenerConditionAccepted)) {
-				lp = cond(string(gwv1.ListenerConditionProgrammed), string(gwv1.ListenerReasonInvalid), false, g.Generation, "listener not accepted")
+			if !res.Programmable[ls.Name] {
+				lp = cond(string(gwv1.ListenerConditionProgrammed), string(gwv1.ListenerReasonInvalid), false, g.Generation, "listener is not valid; see its other conditions")
 			}
 			ls.Conditions = merge(have, append(slices.Clone(ls.Conditions), lp))
 			listeners[j] = ls
@@ -234,24 +271,4 @@ func (r *Reconciler) writeStatus(ctx context.Context, out *Output, classes *gwv1
 		update(p, changed)
 	}
 	return errors.Join(errs...)
-}
-
-// addresses reports the proxy Service's address(es) on Gateways.
-func (r *Reconciler) addresses(services []corev1.Service) []gwv1.GatewayStatusAddress {
-	for _, s := range services {
-		if s.Namespace != r.ProxyService.Namespace || s.Name != r.ProxyService.Name {
-			continue
-		}
-		var out []gwv1.GatewayStatusAddress
-		for _, in := range s.Status.LoadBalancer.Ingress {
-			if in.IP != "" {
-				out = append(out, gwv1.GatewayStatusAddress{Type: ptr(gwv1.IPAddressType), Value: in.IP})
-			}
-		}
-		if len(out) == 0 && s.Spec.ClusterIP != "" && s.Spec.ClusterIP != corev1.ClusterIPNone {
-			out = append(out, gwv1.GatewayStatusAddress{Type: ptr(gwv1.IPAddressType), Value: s.Spec.ClusterIP})
-		}
-		return out
-	}
-	return nil
 }

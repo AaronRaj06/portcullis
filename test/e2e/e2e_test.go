@@ -88,12 +88,21 @@ func TestPolicyBlocksPath(t *testing.T) {
 	}
 }
 
-func TestInvalidPolicyIsReportedAndIgnored(t *testing.T) {
+func TestPolicyCannotBeDodgedByPathSpelling(t *testing.T) {
+	for _, p := range []string{"//admin", "/x/../admin", "/./admin", "/x%2F..%2Fadmin", "/%61dmin"} {
+		if code, _ := get(t, p); code != 403 {
+			t.Errorf("%s: %d, want 403", p, code)
+		}
+	}
+}
+
+func TestInvalidPolicyFollowsOnError(t *testing.T) {
 	const bad = `apiVersion: portcullis.dev/v1alpha1
 kind: PortcullisPolicy
 metadata: {name: broken, namespace: demo}
 spec:
   targetRef: {group: gateway.networking.k8s.io, kind: HTTPRoute, name: app}
+  onError: fail_open
   script: |
     policy "broken" {
       on request { if path { deny(403) } }
@@ -111,6 +120,12 @@ spec:
 	if code, _ := get(t, "/admin"); code != 403 {
 		t.Fatalf("the valid policy must still apply: %d", code)
 	}
+	// With the default, fail_closed, a broken policy closes its route...
+	kubectl(t, strings.Replace(bad, "fail_open", "fail_closed", 1), "apply", "-f", "-")
+	eventually(t, 30*time.Second, "500 from fail_closed", func() bool { code, _ := get(t, "/"); return code == 500 })
+	// ...until it is fixed or removed.
+	kubectl(t, "", "-n", "demo", "delete", "portcullispolicy", "broken")
+	eventually(t, 30*time.Second, "recovery", func() bool { code, _ := get(t, "/"); return code == 200 })
 }
 
 func TestFailoverWhenPodsDeleted(t *testing.T) {

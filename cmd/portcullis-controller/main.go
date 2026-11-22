@@ -4,6 +4,8 @@
 package main
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"flag"
 	"fmt"
 	"net/http"
@@ -46,7 +48,8 @@ func run() error {
 		showVersion = flag.Bool("version", false, "print version and exit")
 		adminSvc    = flag.String("dataplane-admin-service", "portcullis-system/portcullis-admin", "namespace/name of the Service selecting data-plane pods (admin port)")
 		adminPort   = flag.Int("dataplane-admin-port", 9901, "data-plane admin port")
-		proxySvc    = flag.String("dataplane-service", "portcullis-system/portcullis", "namespace/name of the proxy Service, reported as the Gateway address")
+		proxySvc    = flag.String("dataplane-service", "portcullis-system/portcullis", "namespace/name of the proxy Service, whose selector and namespace every Gateway Service uses")
+		adminCA     = flag.String("dataplane-admin-ca", "", "PEM CA for the data-plane admin APIs, which must then serve TLS as portcullis-admin")
 		tokenFile   = flag.String("admin-token-file", "", "file holding the data-plane admin bearer token")
 		leaderElect = flag.Bool("leader-elect", true, "use a Lease so only one replica reconciles")
 		metricsAddr = flag.String("metrics-addr", ":8081", "controller metrics address")
@@ -99,9 +102,23 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	pushClient := &http.Client{Timeout: 15 * time.Second}
+	if *adminCA != "" {
+		pemData, err := os.ReadFile(*adminCA)
+		if err != nil {
+			return fmt.Errorf("-dataplane-admin-ca: %w", err)
+		}
+		roots := x509.NewCertPool()
+		if !roots.AppendCertsFromPEM(pemData) {
+			return fmt.Errorf("-dataplane-admin-ca %s: no PEM certificates found", *adminCA)
+		}
+		// Pods are dialled by IP, so the name to verify is fixed.
+		pushClient.Transport = &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots, ServerName: "portcullis-admin"}}
+	}
 	r := &controller.Reconciler{
 		Client:       mgr.GetClient(),
-		Pusher:       &controller.Pusher{Client: &http.Client{Timeout: 15 * time.Second}, Token: token},
+		Secrets:      mgr.GetAPIReader(),
+		Pusher:       &controller.Pusher{Client: pushClient, Token: token, TLS: *adminCA != ""},
 		AdminService: adminKey, ProxyService: proxyKey,
 		AdminPort: int32(*adminPort), //nolint:gosec // range-checked above
 	}

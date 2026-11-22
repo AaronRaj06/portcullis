@@ -36,6 +36,9 @@ type Manager struct {
 	path    string
 	log     *slog.Logger
 	metrics *metrics.Metrics
+	// Listeners opens the config's extra ports. nil: configs with listeners are rejected.
+	Listeners *proxy.Listeners
+
 	checker *http.Client // health checks for pools using the default transport
 
 	mu         sync.Mutex
@@ -134,7 +137,26 @@ func (m *Manager) applyConfig(c *Config, source, ifMatch string) (Status, error)
 		return st, nil
 	}
 
+	ports := compiled.Snapshot.Ports
+	if m.Listeners != nil {
+		if err := m.Listeners.Open(ports); err != nil {
+			var keep map[int]*proxy.Port
+			if cur := m.h.Current(); cur != nil {
+				keep = cur.Ports
+			}
+			m.Listeners.Retain(keep) // close what Open managed to bind
+			m.record("error")
+			m.log.Warn("config rejected; previous config keeps serving", "source", source, "error", err.Error())
+			return m.status, err
+		}
+	} else if len(ports) > 0 {
+		m.record("error")
+		return m.status, errors.New("this process cannot open listeners")
+	}
 	compiled.Snapshot.Generation = m.status.Generation + 1
+	if m.Listeners != nil {
+		defer m.Listeners.Retain(ports) // after the swap
+	}
 	m.h.Swap(compiled.Snapshot) // new requests use it from here on; in-flight ones finish on the old one
 
 	if m.stopHealth != nil {

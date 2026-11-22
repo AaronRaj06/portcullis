@@ -41,6 +41,11 @@ kubectl apply -f deploy/manifests/portcullis.yaml
 if ! kubectl -n portcullis-system get secret portcullis-admin-token >/dev/null 2>&1; then
   kubectl -n portcullis-system create secret generic portcullis-admin-token --from-literal=token="$(openssl rand -hex 32)"
 fi
+if ! kubectl -n portcullis-system get secret portcullis-admin-tls >/dev/null 2>&1; then
+  openssl req -x509 -newkey rsa:2048 -nodes -days 825 -subj /CN=portcullis-admin \
+    -addext subjectAltName=DNS:portcullis-admin -keyout "$TMP/admin.key" -out "$TMP/admin.crt" 2>/dev/null
+  kubectl -n portcullis-system create secret tls portcullis-admin-tls --cert="$TMP/admin.crt" --key="$TMP/admin.key"
+fi
 kubectl -n portcullis-system rollout restart deployment >/dev/null # pick up rebuilt :dev images
 kubectl -n portcullis-system rollout status deployment/portcullis-controller --timeout=180s
 kubectl -n portcullis-system rollout status deployment/portcullis --timeout=180s
@@ -51,6 +56,12 @@ kubectl -n demo rollout status deployment/app-v1 --timeout=120s
 kubectl -n demo rollout status deployment/app-v2 --timeout=120s
 kubectl -n demo wait --for=condition=Programmed gateway/gw --timeout=120s
 kubectl -n demo get gateway,httproute,portcullispolicy
+# Each Gateway has its own Service. kind publishes one NodePort, so point it at the demo Gateway.
+IP=$(kubectl -n demo get gateway gw -o jsonpath='{.status.addresses[0].value}')
+TARGET=$(kubectl -n portcullis-system get svc -o jsonpath="{.items[?(@.spec.clusterIP=='$IP')].spec.ports[0].targetPort}")
+kubectl -n portcullis-system patch svc portcullis --type=json \
+  -p "[{\"op\":\"replace\",\"path\":\"/spec/ports/0/targetPort\",\"value\":$TARGET}]"
+for _ in $(seq 60); do curl -sf -o /dev/null --max-time 2 "$URL/" && break; sleep 1; done
 
 step "canary: 200 requests"
 for _ in $(seq 200); do curl -s "$URL/"; done | cut -d' ' -f1 | sort | uniq -c

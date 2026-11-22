@@ -30,10 +30,8 @@ docker build -q -t portcullis-conformance:dev "$TMP" >/dev/null
 docker save --platform "linux/$ARCH" -o "$TMP/image.tar" portcullis-conformance:dev
 "$KIND" load image-archive --name "$CLUSTER" "$TMP/image.tar"
 
-# Every Gateway shares the one data-plane address, so the demo app's catch-all
-# route would answer the suite's requests. Remove it for the run; put it back after.
-kubectl delete -f deploy/demo/app.yaml --ignore-not-found --wait >/dev/null
-trap 'rm -rf "$TMP"; kubectl apply -f deploy/demo/app.yaml >/dev/null' EXIT
+# The suite gets cluster-admin only while it runs.
+trap 'rm -rf "$TMP"; kubectl delete clusterrolebinding portcullis-conformance --ignore-not-found >/dev/null' EXIT
 
 kubectl delete job -n portcullis-system conformance --ignore-not-found --wait >/dev/null
 kubectl apply -f - <<YAML

@@ -50,7 +50,8 @@ type Handler struct {
 // it even if a reload swaps in a new one meanwhile. Nothing in a published
 // Snapshot may be modified.
 type Snapshot struct {
-	Router         *Router
+	Router         *Router       // the -listen address
+	Ports          map[int]*Port // every other listener
 	TrustedProxies []netip.Prefix
 	// Pools holds every configured pool by name, for route_to. A pool may be
 	// reachable only through a policy, so it is not necessarily in Router.
@@ -65,7 +66,7 @@ type Snapshot struct {
 
 // AllPools returns every pool: those used by routes, plus any only reachable via route_to.
 func (s *Snapshot) AllPools() []*lb.Pool {
-	ps := s.Router.Pools()
+	ps := s.Router.Pools() // the other ports' pools are all in s.Pools
 	for _, p := range s.Pools {
 		if !slices.Contains(ps, p) {
 			ps = append(slices.Clip(ps), p)
@@ -106,7 +107,10 @@ type reqState struct {
 	penv                          *policy.Env       // nil when the route has no policies
 }
 
-func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) { h.serve(w, r, 0) }
+
+// serve handles a request that arrived on port (0: the -listen address).
+func (h *Handler) serve(w http.ResponseWriter, r *http.Request, port int) {
 	start := time.Now()
 	snap := h.snap.Load() // one load: this request sees one consistent config
 	var trustedNets []netip.Prefix
@@ -170,7 +174,17 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	r = normalizePath(r)
-	route := snap.Router.Match(r)
+	router := snap.Router
+	if port != 0 {
+		router = nil // never fall back: that would serve another Gateway's routes
+		if p := snap.Ports[port]; p != nil {
+			router = p.Router
+		}
+	}
+	var route *Route
+	if router != nil {
+		route = router.Match(r)
+	}
 	if route == nil {
 		st.status, st.errKind = http.StatusNotFound, "no_route"
 		h.writeError(w, rc, st.status, rid)
@@ -203,10 +217,33 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			pool = snap.Pools[penv.RouteTo] // validated at load: the pool exists
 		}
 	}
+	if route.Redirect != nil {
+		st.status, st.errKind = route.Redirect.Status, "redirect"
+		loc := route.Redirect.location(r.Host, tmpl.URL)
+		if !h.responsePhase(&st, st.status, w.Header(), rid) {
+			clear(w.Header())
+			st.status, st.errKind = http.StatusInternalServerError, "policy_error"
+			h.writeError(w, rc, st.status, rid)
+			return
+		}
+		h.extendWrite(rc)
+		w.Header().Set("Location", loc)
+		w.Header().Set(HeaderRequestID, rid)
+		w.WriteHeader(st.status)
+		return
+	}
+	if route.Edit != nil {
+		route.Edit.apply(tmpl.Header)
+	}
 	if pool == nil {
 		pool = route.PickPool()
 	}
 	st.pool = pool.Name
+	if pool.Status != 0 {
+		st.status, st.errKind = pool.Status, "fixed_status"
+		h.upstreamError(w, rc, rid, &st)
+		return
+	}
 	if pool.Budget != nil {
 		pool.Budget.Deposit()
 	}

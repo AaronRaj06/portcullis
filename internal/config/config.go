@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -28,6 +29,9 @@ type Config struct {
 	Pools          []Pool   `json:"pools"`
 	Routes         []Route  `json:"routes"`
 	Policies       []Policy `json:"policies,omitempty"`
+	// Listeners are extra ports, opened and closed on reload. A route with a
+	// port is served only there.
+	Listeners []Listener `json:"listeners,omitempty"`
 	// Instances is how many proxy replicas share the traffic. Each divides
 	// every rate_limit by it, so together they approximate the global limit.
 	Instances int `json:"instances,omitempty"` // default 1
@@ -35,6 +39,10 @@ type Config struct {
 
 // Policy attaches a PolicyScript program (docs/POLICY_LANGUAGE.md) to routes.
 type Policy struct {
+	// ID, if set, replaces the script's policy name as the identity: unique in
+	// the config, and the key for rate-limit state. The controller sets it to
+	// namespace/name, so tenants cannot collide.
+	ID       string   `json:"id,omitempty"`
 	Script   string   `json:"script"`
 	Routes   []string `json:"routes,omitempty"`   // omitted: every route
 	OnError  string   `json:"onError,omitempty"`  // fail_closed (default) or fail_open
@@ -49,6 +57,7 @@ type Pool struct {
 	LB          string       `json:"lb,omitempty"`      // round_robin (default), weighted_round_robin, least_conn, p2c, hash
 	HashKey     string       `json:"hashKey,omitempty"` // for lb=hash: ip (default), path, header:NAME, cookie:NAME
 	Backends    []Backend    `json:"backends"`
+	Status      int          `json:"status,omitempty"`      // instead of backends: always answer this code
 	HealthCheck *HealthCheck `json:"healthCheck,omitempty"` // omitted: no active checks
 	Ejection    *Ejection    `json:"ejection,omitempty"`
 	Retries     *Retries     `json:"retries,omitempty"`
@@ -101,6 +110,55 @@ type Route struct {
 	Methods  []string      `json:"methods,omitempty"`
 	Headers  []HeaderMatch `json:"headers,omitempty"`
 	Backends []PoolRef     `json:"backends"` // one entry, or a weighted split
+
+	Port           int         `json:"port,omitempty"` // a listeners[].port; omitted: the -listen address
+	RequestHeaders *HeaderEdit `json:"requestHeaders,omitempty"`
+	Redirect       *Redirect   `json:"redirect,omitempty"`
+}
+
+// HeaderEdit changes headers on the way upstream: set, then add, then remove.
+type HeaderEdit struct {
+	Set    []HeaderMatch `json:"set,omitempty"`
+	Add    []HeaderMatch `json:"add,omitempty"`
+	Remove []string      `json:"remove,omitempty"`
+}
+
+// Redirect answers with a Location built from these fields and the request's path and query.
+type Redirect struct {
+	Scheme string `json:"scheme"`         // http or https
+	Host   string `json:"host,omitempty"` // omitted: the request's
+	Port   int    `json:"port"`           // left out of Location when it is the scheme's default
+	Status int    `json:"status"`         // 301, 302, 303, 307 or 308
+}
+
+// Listener is an extra port: HTTP, or HTTPS if it has certificates.
+type Listener struct {
+	Port         int           `json:"port"`
+	Certificates []Certificate `json:"certificates,omitempty"`
+}
+
+// Certificate is a PEM pair and the server name it is served for.
+type Certificate struct {
+	Host string `json:"host,omitempty"` // omitted: any name
+	Cert string `json:"cert"`
+	Key  string `json:"key"` // secret: see Redacted
+}
+
+// Redacted returns a copy of c that is safe to show: no private keys.
+func (c *Config) Redacted() *Config {
+	if c == nil {
+		return nil
+	}
+	out := *c
+	out.Listeners = slices.Clone(c.Listeners)
+	for i := range out.Listeners {
+		l := &out.Listeners[i]
+		l.Certificates = slices.Clone(l.Certificates)
+		for j := range l.Certificates {
+			l.Certificates[j].Key = "REDACTED"
+		}
+	}
+	return &out
 }
 
 // HeaderMatch is an exact header match.
@@ -136,7 +194,7 @@ func (d *Duration) UnmarshalJSON(b []byte) error {
 }
 
 // MaxSize bounds a config document (files and PUT bodies).
-const MaxSize = 4 << 20
+const MaxSize = 16 << 20
 
 // Parse decodes YAML or JSON strictly: unknown fields are errors, so a typo
 // like "pathtype" is reported instead of silently ignored.

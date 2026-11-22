@@ -18,6 +18,10 @@ type Pool struct {
 	Backends []*Backend
 	Balancer Balancer
 
+	// Status, if set, makes this a pool with no backends that always answers
+	// with that code: the share of a split whose backend is invalid, for example.
+	Status int
+
 	// Transport overrides the proxy's default transport for this pool, e.g. to
 	// trust a private CA or speak cleartext HTTP/2 (h2c). nil uses the default.
 	Transport http.RoundTripper

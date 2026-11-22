@@ -1,11 +1,14 @@
 package config
 
 import (
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"net/netip"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -89,7 +92,11 @@ func (c *Config) Validate() error {
 		if p.LB != "hash" && p.HashKey != "" {
 			v.add(path+".hashKey", "only used with lb: hash")
 		}
-		if len(p.Backends) == 0 {
+		if p.Status != 0 {
+			if p.Status < 400 || p.Status > 599 || len(p.Backends) > 0 {
+				v.add(path+".status", "must be 400..599, on a pool without backends")
+			}
+		} else if len(p.Backends) == 0 {
 			v.add(path+".backends", "at least one backend is required")
 		}
 		seen := map[string]bool{}
@@ -145,6 +152,7 @@ func (c *Config) Validate() error {
 	if len(c.Routes) == 0 {
 		v.add("routes", "at least one route is required")
 	}
+	ports := v.listeners(c.Listeners)
 	routes := map[string]bool{}
 	for i := range c.Routes {
 		r := &c.Routes[i]
@@ -172,6 +180,18 @@ func (c *Config) Validate() error {
 				v.add(fmt.Sprintf("%s.headers[%d].name", path, j), "required")
 			}
 		}
+		if r.Port != 0 && !ports[r.Port] {
+			v.add(path+".port", "no listener has port %d", r.Port)
+		}
+		if e := r.RequestHeaders; e != nil {
+			if err := e.Check(); err != nil {
+				v.add(path+".requestHeaders", "%v", err)
+			}
+		}
+		if d := r.Redirect; d != nil && ((d.Scheme != "http" && d.Scheme != "https") || d.Port < 1 || d.Port > 65535 ||
+			!slices.Contains(redirectStatuses, d.Status) || strings.ContainsAny(d.Host, " /?#@\\\r\n")) {
+			v.add(path+".redirect", "needs scheme http or https, a port, a plain host and a 301, 302, 303, 307 or 308 status")
+		}
 		if len(r.Backends) == 0 {
 			v.add(path+".backends", "at least one pool reference is required")
 		}
@@ -197,15 +217,79 @@ func (c *Config) Validate() error {
 	return nil
 }
 
-// MaxPolicies bounds the number of policies in one config.
+// MaxPolicies bounds the policies that run on one route, and so on one
+// request. The total is bounded only by MaxSize, so one tenant's policies
+// cannot use up another's allowance.
 const MaxPolicies = 64
+
+var redirectStatuses = []int{301, 302, 303, 307, 308}
+
+func (c *checker) listeners(ls []Listener) map[int]bool {
+	ports := map[int]bool{}
+	for i, l := range ls {
+		path := fmt.Sprintf("listeners[%d]", i)
+		if l.Port < 1 || l.Port > 65535 || ports[l.Port] {
+			c.add(path+".port", "%d is not a unique TCP port", l.Port)
+		}
+		ports[l.Port] = true
+		for j, cert := range l.Certificates {
+			if _, err := tls.X509KeyPair([]byte(cert.Cert), []byte(cert.Key)); err != nil {
+				c.add(fmt.Sprintf("%s.certificates[%d]", path, j), "%v", err)
+			}
+		}
+	}
+	return ports
+}
+
+// Check reports an edit the proxy must not make: an invalid header, or one
+// that belongs to the connection or the message framing.
+func (e *HeaderEdit) Check() error {
+	name := func(n string) error {
+		if n == "" || strings.Trim(n, tokenChars) != "" {
+			return fmt.Errorf("%q is not a header name", n)
+		}
+		switch http.CanonicalHeaderKey(n) {
+		case "Host", "Content-Length", "Connection", "Proxy-Connection", "Keep-Alive", "Te", "Trailer", "Transfer-Encoding", "Upgrade":
+			return fmt.Errorf("header %q cannot be modified", n)
+		}
+		return nil
+	}
+	for _, h := range slices.Concat(e.Set, e.Add) {
+		if err := name(h.Name); err != nil {
+			return err
+		}
+		if strings.ContainsFunc(h.Value, func(r rune) bool { return r == 0x7f || (r < 0x20 && r != '\t') }) {
+			return fmt.Errorf("header %q: the value has control characters", h.Name)
+		}
+	}
+	for _, n := range e.Remove {
+		if err := name(n); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+const tokenChars = //nolint:gosec // RFC 9110 token characters, not a credential
+"!#$%&'*+-.^_`|~0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
 func (c *checker) policies(cfg *Config, pools, routes map[string]bool) {
 	if cfg.Instances < 1 || cfg.Instances > 1000 {
 		c.add("instances", "%d is outside 1..1000", cfg.Instances)
 	}
-	if len(cfg.Policies) > MaxPolicies {
-		c.add("policies", "%d policies, limit is %d", len(cfg.Policies), MaxPolicies)
+	perRoute, everywhere := map[string]int{}, 0
+	for _, p := range cfg.Policies {
+		if len(p.Routes) == 0 {
+			everywhere++
+		}
+		for _, r := range p.Routes {
+			perRoute[r]++
+		}
+	}
+	for i, r := range cfg.Routes {
+		if n := everywhere + perRoute[r.Name]; n > MaxPolicies {
+			c.add(fmt.Sprintf("routes[%d]", i), "%d policies, limit is %d per route", n, MaxPolicies)
+		}
 	}
 	names := map[string]bool{}
 	for i := range cfg.Policies {
@@ -247,7 +331,7 @@ func (c *checker) policies(cfg *Config, pools, routes map[string]bool) {
 
 func compilePolicy(pc *Policy, instances int, pools map[string]bool, lim func(string, int, time.Duration) *ratelimit.Limiter) (*policy.Program, error) {
 	return policy.Compile(pc.Script, policy.Options{
-		MaxSteps: pc.MaxSteps, Timeout: time.Duration(pc.Timeout), FailOpen: pc.OnError == "fail_open",
+		Name: pc.ID, MaxSteps: pc.MaxSteps, Timeout: time.Duration(pc.Timeout), FailOpen: pc.OnError == "fail_open",
 		Share: instances, Pools: pools, Limiter: lim,
 	})
 }

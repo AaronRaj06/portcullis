@@ -74,7 +74,7 @@ func TestReconcilePushesAndWritesStatus(t *testing.T) {
 
 	admin := slice("portcullis-admin", 9901, false, host) // not ready: still pushed to
 	admin.Namespace = "portcullis-system"
-	proxySvc := corev1.Service{ObjectMeta: om("portcullis-system", "portcullis"), Spec: corev1.ServiceSpec{ClusterIP: "10.96.0.50"}}
+	proxySvc := corev1.Service{ObjectMeta: om("portcullis-system", "portcullis"), Spec: corev1.ServiceSpec{ClusterIP: "10.96.0.50", Selector: map[string]string{"app": "portcullis"}}}
 	gc, gw := class(), gateway()
 	route := httpRoute("app", nil, gwv1.HTTPRouteRule{BackendRefs: []gwv1.HTTPBackendRef{backendRef("web", 80, 1)}})
 	pol := v1alpha1.PortcullisPolicy{ObjectMeta: om("default", "block"), Spec: v1alpha1.PolicySpec{
@@ -86,10 +86,28 @@ func TestReconcilePushesAndWritesStatus(t *testing.T) {
 		WithStatusSubresource(&gwv1.GatewayClass{}, &gwv1.Gateway{}, &gwv1.HTTPRoute{}, &v1alpha1.PortcullisPolicy{}).Build()
 	r := &Reconciler{Client: c, Pusher: &Pusher{Client: srv.Client(), Token: "t0ken"},
 		AdminService: types.NamespacedName{Namespace: "portcullis-system", Name: "portcullis-admin"}, AdminPort: int32(port),
-		ProxyService: types.NamespacedName{Namespace: "portcullis-system", Name: "portcullis"}}
+		ProxyService: types.NamespacedName{Namespace: "portcullis-system", Name: "portcullis"}, Secrets: c}
 	ctx := context.Background()
 	if _, err := r.Reconcile(ctx, allKey); err != nil {
 		t.Fatal(err)
+	}
+	// The Gateway's own Service. The fake API server assigns no ClusterIP, so do that.
+	var gwSvc corev1.Service
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "portcullis-system", Name: serviceName(&gw)}, &gwSvc); err != nil {
+		t.Fatal(err)
+	}
+	if p := gwSvc.Spec.Ports; len(p) != 1 || p[0].Port != 80 || p[0].TargetPort.IntValue() < firstTargetPort || gwSvc.Spec.Selector["app"] != "portcullis" {
+		t.Fatalf("gateway service: %+v", gwSvc.Spec)
+	}
+	gwSvc.Spec.ClusterIP = "10.96.0.77"
+	if err := c.Update(ctx, &gwSvc); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Reconcile(ctx, allKey); err != nil {
+		t.Fatal(err)
+	}
+	if n := dp.last.Listeners; len(n) != 1 || n[0].Port != gwSvc.Spec.Ports[0].TargetPort.IntValue() {
+		t.Fatalf("pushed listeners %+v", n)
 	}
 
 	if dp.last == nil || len(dp.last.Policies) != 1 || dp.last.Instances != 1 || dp.tokens[0] != "Bearer t0ken" ||
@@ -99,7 +117,7 @@ func TestReconcilePushesAndWritesStatus(t *testing.T) {
 	var g gwv1.Gateway
 	_ = c.Get(ctx, types.NamespacedName{Namespace: "default", Name: "gw"}, &g)
 	if !meta.IsStatusConditionTrue(g.Status.Conditions, "Programmed") || !meta.IsStatusConditionTrue(g.Status.Conditions, "Accepted") ||
-		len(g.Status.Addresses) != 1 || g.Status.Addresses[0].Value != "10.96.0.50" || g.Status.Listeners[0].AttachedRoutes != 1 ||
+		len(g.Status.Addresses) != 1 || g.Status.Addresses[0].Value != "10.96.0.77" || g.Status.Listeners[0].AttachedRoutes != 1 ||
 		!meta.IsStatusConditionTrue(g.Status.Listeners[0].Conditions, "Programmed") {
 		t.Fatalf("gateway status: %+v", g.Status)
 	}

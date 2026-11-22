@@ -32,6 +32,9 @@ type Route struct {
 	Headers []HeaderMatch
 	Pool    *lb.Pool
 	Split   []WeightedPool
+	// Edit and Redirect are applied after the policies, which may deny first.
+	Edit     *HeaderEdit
+	Redirect *Redirect
 	// Policies run in order on every request this route matches.
 	Policies []*policy.Program
 
@@ -80,6 +83,7 @@ func NewRouter(routes []Route) (*Router, error) {
 			Name: routes[i].Name, Hosts: routes[i].Hosts, Path: routes[i].Path, Exact: routes[i].Exact,
 			Methods: routes[i].Methods, Headers: slices.Clone(routes[i].Headers),
 			Pool: routes[i].Pool, Split: routes[i].Split, Policies: routes[i].Policies,
+			Edit: routes[i].Edit, Redirect: routes[i].Redirect,
 		}
 		r := rp
 		if r.Name == "" || names[r.Name] {
@@ -95,7 +99,7 @@ func NewRouter(routes []Route) (*Router, error) {
 		}
 		weights := make([]int, len(split))
 		for j, wp := range split {
-			if wp.Pool == nil || len(wp.Pool.Backends) == 0 || wp.Pool.Balancer == nil {
+			if wp.Pool == nil || (wp.Pool.Status == 0 && (len(wp.Pool.Backends) == 0 || wp.Pool.Balancer == nil)) {
 				return nil, fmt.Errorf("route %q: every pool needs at least one backend and a balancer", r.Name)
 			}
 			if wp.Weight < 0 {
