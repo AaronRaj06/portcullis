@@ -82,10 +82,11 @@ func (ls *Listeners) Open(want map[int]*Port) error {
 	for port, p := range want {
 		useTLS := len(p.Certs) > 0
 		if cur := ls.open[port]; cur != nil {
-			if (cur.srv.TLSConfig != nil) != useTLS {
-				return fmt.Errorf("listener %d: switching between HTTP and HTTPS needs a different port", port)
+			if (cur.srv.TLSConfig != nil) == useTLS {
+				continue
 			}
-			continue
+			// The port changed protocol: close it and bind it again.
+			ls.retain(otherPorts(ls.open, port))
 		}
 		ln, err := net.Listen("tcp", net.JoinHostPort(ls.host, strconv.Itoa(port)))
 		if err != nil {
@@ -121,6 +122,16 @@ func (ls *Listeners) Open(want map[int]*Port) error {
 		}()
 	}
 	return nil
+}
+
+func otherPorts(open map[int]*portServer, except int) map[int]*Port {
+	keep := map[int]*Port{}
+	for p := range open {
+		if p != except {
+			keep[p] = &Port{}
+		}
+	}
+	return keep
 }
 
 // Retain closes every port that is not in keep. The socket closes at once;

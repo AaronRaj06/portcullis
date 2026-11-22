@@ -138,4 +138,13 @@ func TestListenersTLSFiltersAndIsolation(t *testing.T) {
 		conn.Close()
 		t.Error("removed listener still accepts")
 	}
+
+	// A port may change from HTTPS to HTTP (the controller reuses freed ports).
+	next.Listeners = []config.Listener{{Port: secure}}
+	if _, err := mgr.ApplyConfig(&next, "test"); err != nil {
+		t.Fatalf("protocol change: %v", err)
+	}
+	if r, _ := get(fmt.Sprintf("http://127.0.0.1:%d/only-https", secure), "", nil); r.StatusCode != 200 {
+		t.Errorf("after protocol change: %d", r.StatusCode)
+	}
 }
